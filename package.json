@@ -1,0 +1,13 @@
+{
+  "name": "csv-processor",
+  "version": "1.0.0",
+  "description": "Processador CSV multithread",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "mysql2": "^3.6.0"
+  }
+}
