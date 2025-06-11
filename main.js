@@ -59,7 +59,7 @@ if (isMainThread) {
     await getCSVHeader(filePath);
 
     const startTime = Date.now();
-    const batchSize = 50000; // Aumentado para 50k linhas por batch
+    const batchSize = 25000; // Aumentado para 50k linhas por batch
     const numCPUs = Math.min(os.cpus().length, 8); // Limitar a 8 workers
     const maxConcurrentBatches = 4; // Limitar batches simultâneos
 
