@@ -48,7 +48,7 @@ if (isMainThread) {
     return null;
   }
 
-  async function processCSVStreaming(filePath, responseCode) {
+  async function processFileInChunks(filePath, responseCode) {
     if (!fs.existsSync(filePath)) {
       console.log('\nERRO: Arquivo não encontrado...\n');
       return;
@@ -59,30 +59,18 @@ if (isMainThread) {
     await getCSVHeader(filePath);
 
     const startTime = Date.now();
-    
-    // Otimizações baseadas na máquina (16GB RAM, load baixo)
-    const batchSize = 100000; // Aumentar para 100k linhas por batch
-    const numCPUs = Math.min(os.cpus().length, 12); // Usar mais workers
-    const maxConcurrentBatches = 8; // Mais batches simultâneos
-    
-    console.log(`Sistema: ${os.cpus().length} CPUs, ${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB RAM`);
-    console.log(`Processando arquivo como código ${responseCode}`);
+    const chunkSize = 5000000; // 5 milhões de linhas por chunk
+    const batchSize = 50000; // 50k linhas por batch
+    const numCPUs = Math.min(os.cpus().length, 6); // Máximo 6 workers
+    const maxConcurrentBatches = 3; // Máximo 3 batches simultâneos
+
+    console.log(`Processando arquivo em chunks de ${chunkSize.toLocaleString()} linhas`);
     console.log(`Usando ${numCPUs} workers com batches de ${batchSize.toLocaleString()} linhas`);
     console.log(`Máximo ${maxConcurrentBatches} batches simultâneos\n`);
 
-    // Configurar stream de leitura com buffer maior
-    const fileStream = fs.createReadStream(filePath, {
-      highWaterMark: 4 * 1024 * 1024 // Buffer de 4MB
-    });
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
-
-    let lineCount = 0;
-    let batch = [];
-    let batchNumber = 0;
-    const consolidated = {
+    let totalLines = 0;
+    let chunkNumber = 0;
+    const finalConsolidated = {
       calls200: {},
       calls404: {},
       calls487: {},
@@ -99,178 +87,234 @@ if (isMainThread) {
       });
     }
 
-    // Array para controlar batches em processamento
-    const activeBatches = [];
-
-    // Função otimizada para processar batch
-    const processBatch = async (batchData, batchNum) => {
-      return new Promise((resolve, reject) => {
-        let availableWorker = null;
-        let attempts = 0;
-        
-        const findWorker = () => {
-          availableWorker = workers.find(w => !w.busy);
-          if (!availableWorker && attempts < 100) { // Aumentar timeout
-            attempts++;
-            setTimeout(findWorker, 50); // Reduzir intervalo
-            return;
-          }
-          
-          if (!availableWorker) {
-            reject(new Error(`Nenhum worker disponível após ${attempts * 50}ms`));
-            return;
-          }
-
-          availableWorker.busy = true;
-
-          const messageHandler = (result) => {
-            consolidateResults(result, consolidated);
-            
-            if (batchNum % 50 === 0) { // Log a cada 50 batches
-              const memUsage = process.memoryUsage();
-              console.log(`Batch ${batchNum} processado: ${result.processed} linhas - Mem: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
-            }
-
-            availableWorker.busy = false;
-            availableWorker.worker.off('message', messageHandler);
-            availableWorker.worker.off('error', errorHandler);
-            resolve(result);
-          };
-
-          const errorHandler = (error) => {
-            console.error(`Erro no batch ${batchNum}:`, error);
-            availableWorker.busy = false;
-            availableWorker.worker.off('message', messageHandler);
-            availableWorker.worker.off('error', errorHandler);
-            reject(error);
-          };
-
-          availableWorker.worker.once('message', messageHandler);
-          availableWorker.worker.once('error', errorHandler);
-
-          availableWorker.worker.postMessage({
-            lines: batchData,
-            batchNumber: batchNum,
-            responseCode: responseCode
+    // Função para processar um chunk do arquivo
+    const processChunk = async () => {
+      return new Promise(async (resolve, reject) => {
+        try {
+          const fileStream = fs.createReadStream(filePath);
+          const rl = readline.createInterface({
+            input: fileStream,
+            crlfDelay: Infinity
           });
-        };
 
-        findWorker();
+          let lineCount = 0;
+          let skipLines = chunkNumber * chunkSize;
+          let batch = [];
+          let batchNumber = 0;
+          const chunkConsolidated = {
+            calls200: {},
+            calls404: {},
+            calls487: {},
+            total: 0
+          };
+
+          // Array para controlar batches em processamento
+          const activeBatches = [];
+
+          // Função para processar batch
+          const processBatch = async (batchData, batchNum) => {
+            return new Promise((resolve, reject) => {
+              let availableWorker = null;
+              let attempts = 0;
+              
+              const findWorker = () => {
+                availableWorker = workers.find(w => !w.busy);
+                if (!availableWorker && attempts < 50) {
+                  attempts++;
+                  setTimeout(findWorker, 100);
+                  return;
+                }
+                
+                if (!availableWorker) {
+                  reject(new Error(`Nenhum worker disponível após ${attempts * 100}ms`));
+                  return;
+                }
+
+                availableWorker.busy = true;
+
+                const messageHandler = (result) => {
+                  consolidateResults(result, chunkConsolidated);
+                  availableWorker.busy = false;
+                  availableWorker.worker.off('message', messageHandler);
+                  availableWorker.worker.off('error', errorHandler);
+                  resolve(result);
+                };
+
+                const errorHandler = (error) => {
+                  console.error(`Erro no batch ${batchNum}:`, error);
+                  availableWorker.busy = false;
+                  availableWorker.worker.off('message', messageHandler);
+                  availableWorker.worker.off('error', errorHandler);
+                  reject(error);
+                };
+
+                availableWorker.worker.once('message', messageHandler);
+                availableWorker.worker.once('error', errorHandler);
+
+                availableWorker.worker.postMessage({
+                  lines: batchData,
+                  batchNumber: batchNum,
+                  responseCode: responseCode
+                });
+              };
+
+              findWorker();
+            });
+          };
+
+          // Processar linhas do chunk
+          for await (const line of rl) {
+            if (line.trim()) {
+              totalLines++;
+              lineCount++;
+
+              // Pular linhas até chegar no chunk atual
+              if (totalLines <= skipLines) {
+                continue;
+              }
+
+              batch.push(line);
+
+              // Processar batch quando estiver cheio
+              if (batch.length === batchSize) {
+                batchNumber++;
+                const batchToProcess = [...batch];
+                batch = [];
+
+                // Aguardar se há muitos batches em processamento
+                while (activeBatches.length >= maxConcurrentBatches) {
+                  await Promise.race(activeBatches);
+                  
+                  // Remover batches concluídos
+                  for (let i = activeBatches.length - 1; i >= 0; i--) {
+                    try {
+                      const result = await Promise.race([
+                        activeBatches[i], 
+                        new Promise(resolve => setTimeout(() => resolve('pending'), 10))
+                      ]);
+                      if (result !== 'pending') {
+                        activeBatches.splice(i, 1);
+                      }
+                    } catch (error) {
+                      activeBatches.splice(i, 1);
+                    }
+                  }
+                }
+
+                const batchPromise = processBatch(batchToProcess, batchNumber);
+                activeBatches.push(batchPromise);
+
+                // Log de progresso do chunk
+                if (lineCount % 100000 === 0) {
+                  const elapsed = (Date.now() - startTime) / 1000;
+                  const linesPerSecond = totalLines / elapsed;
+                  const memUsage = process.memoryUsage();
+                  
+                  console.log(`Chunk ${chunkNumber + 1}: ${lineCount.toLocaleString()} linhas processadas`);
+                  console.log(`Total geral: ${totalLines.toLocaleString()} linhas (${Math.round(linesPerSecond).toLocaleString()} linhas/s)`);
+                  console.log(`Memória: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB\n`);
+                }
+              }
+
+              // Se atingiu o limite do chunk, parar
+              if (lineCount >= chunkSize) {
+                break;
+              }
+            }
+          }
+
+          // Processar último batch do chunk se houver
+          if (batch.length > 0) {
+            batchNumber++;
+            const batchPromise = processBatch(batch, batchNumber);
+            activeBatches.push(batchPromise);
+          }
+
+          // Aguardar todos os batches do chunk
+          await Promise.allSettled(activeBatches);
+
+          rl.close();
+          fileStream.destroy();
+
+          console.log(`\n✅ Chunk ${chunkNumber + 1} concluído: ${lineCount.toLocaleString()} linhas processadas`);
+          console.log(`Dados consolidados do chunk:`);
+          console.log(`  - Calls200: ${Object.keys(chunkConsolidated.calls200).length.toLocaleString()}`);
+          console.log(`  - Calls404: ${Object.keys(chunkConsolidated.calls404).length.toLocaleString()}`);
+          console.log(`  - Calls487: ${Object.keys(chunkConsolidated.calls487).length.toLocaleString()}\n`);
+
+          // Consolidar dados do chunk no resultado final
+          consolidateResults(chunkConsolidated, finalConsolidated);
+
+          // Força garbage collection
+          if (global.gc) {
+            global.gc();
+          }
+
+          resolve({ processed: lineCount, hasMore: lineCount === chunkSize });
+
+        } catch (error) {
+          reject(error);
+        }
       });
     };
 
-    // Processar arquivo linha por linha
-    for await (const line of rl) {
-      if (line.trim()) {
-        batch.push(line);
-        lineCount++;
+    // Processar arquivo chunk por chunk
+    let hasMore = true;
+    while (hasMore) {
+      chunkNumber++;
+      console.log(`\n🔄 Iniciando processamento do Chunk ${chunkNumber}...`);
+      
+      try {
+        const result = await processChunk();
+        hasMore = result.hasMore;
+      } catch (error) {
+        console.error(`Erro no chunk ${chunkNumber}:`, error.message);
+        break;
+      }
 
-        if (batch.length === batchSize) {
-          batchNumber++;
-          const batchToProcess = [...batch];
-          batch = [];
-
-          // Controle de concorrência otimizado
-          while (activeBatches.length >= maxConcurrentBatches) {
-            try {
-              await Promise.race(activeBatches);
-              
-              // Limpeza eficiente de batches concluídos
-              const stillPending = [];
-              for (const batchPromise of activeBatches) {
-                try {
-                  const result = await Promise.race([
-                    batchPromise,
-                    new Promise(resolve => setTimeout(() => resolve('timeout'), 10))
-                  ]);
-                  if (result === 'timeout') {
-                    stillPending.push(batchPromise);
-                  }
-                } catch (error) {
-                  // Batch com erro - não adicionar ao stillPending
-                }
-              }
-              activeBatches.splice(0, activeBatches.length, ...stillPending);
-              
-            } catch (error) {
-              console.warn('Erro no controle de batches:', error.message);
-              activeBatches.length = Math.max(0, activeBatches.length - 1);
-            }
-          }
-
-          const batchPromise = processBatch(batchToProcess, batchNumber);
-          activeBatches.push(batchPromise);
-
-          // Log de progresso otimizado
-          if (lineCount % 500000 === 0) { // Log a cada 500k linhas
-            const elapsed = (Date.now() - startTime) / 1000;
-            const linesPerSecond = lineCount / elapsed;
-            const memUsage = process.memoryUsage();
-            const estimatedTotal = lineCount / (elapsed / 60) * 60; // Estimativa por hora
-            
-            console.log(`\n=== PROGRESSO ===`);
-            console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
-            console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
-            console.log(`Batches ativos: ${activeBatches.length}/${maxConcurrentBatches}`);
-            console.log(`Memória: Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / RSS ${Math.round(memUsage.rss / 1024 / 1024)}MB`);
-            console.log(`Workers ocupados: ${workers.filter(w => w.busy).length}/${numCPUs}`);
-            console.log(`==================\n`);
-            
-            // Garbage collection otimizado
-            if (global.gc && lineCount % 1000000 === 0) {
-              global.gc();
-            }
-          }
-        }
+      // Salvar dados no banco a cada chunk (opcional)
+      if (chunkNumber % 2 === 0) { // A cada 2 chunks
+        console.log(`\n💾 Salvando dados intermediários no banco...`);
+        await saveToDB(finalConsolidated, responseCode);
+        
+        // Limpar dados salvos para economizar memória
+        finalConsolidated.calls200 = {};
+        finalConsolidated.calls404 = {};
+        finalConsolidated.calls487 = {};
       }
     }
 
-    // Processar último batch se houver
-    if (batch.length > 0) {
-      batchNumber++;
-      const batchPromise = processBatch(batch, batchNumber);
-      activeBatches.push(batchPromise);
-    }
-
-    console.log('\nAguardando conclusão de todos os batches...');
-    
-    // Aguardar com timeout para evitar travamento
-    try {
-      await Promise.allSettled(activeBatches);
-    } catch (error) {
-      console.error('Erro ao aguardar batches:', error.message);
-    }
-
-    // Fechar workers com cleanup
-    console.log('Fechando workers...');
-    workers.forEach((w, index) => {
+    // Fechar workers
+    workers.forEach(w => {
       try {
         w.worker.terminate();
       } catch (error) {
-        console.warn(`Erro ao fechar worker ${index}:`, error.message);
+        console.warn('Erro ao fechar worker:', error.message);
       }
     });
 
-    console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando no banco...`);
-    await saveToDB(consolidated, responseCode);
+    // Salvar dados finais
+    if (Object.keys(finalConsolidated.calls200).length > 0 || 
+        Object.keys(finalConsolidated.calls404).length > 0 || 
+        Object.keys(finalConsolidated.calls487).length > 0) {
+      console.log(`\n💾 Salvando dados finais no banco...`);
+      await saveToDB(finalConsolidated, responseCode);
+    }
 
     const endTime = Date.now();
     const totalTime = (endTime - startTime) / 1000;
-    const linesPerSecond = lineCount / totalTime;
+    const linesPerSecond = totalLines / totalTime;
     
     console.log(`\n=== RESUMO FINAL ===`);
     console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
-    console.log(`Total processado: ${consolidated.total.toLocaleString()} registros`);
-    console.log(`Registros únicos por código:`);
-    console.log(`  - Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
-    console.log(`  - Calls404: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
-    console.log(`  - Calls487: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
+    console.log(`Total processado: ${totalLines.toLocaleString()} linhas`);
+    console.log(`Chunks processados: ${chunkNumber}`);
     console.log(`====================`);
   }
 
   function consolidateResults(result, consolidated) {
-    // Consolidar calls200 (otimizado)
+    // Consolidar calls200
     for (const number in result.calls200) {
       if (!consolidated.calls200[number] ||
         result.calls200[number].duration > consolidated.calls200[number].duration) {
@@ -278,12 +322,12 @@ if (isMainThread) {
       }
     }
 
-    // Consolidar calls404 (otimizado)
+    // Consolidar calls404
     for (const number in result.calls404) {
       consolidated.calls404[number] = result.calls404[number];
     }
 
-    // Consolidar calls487 (otimizado)
+    // Consolidar calls487
     for (const number in result.calls487) {
       if (!consolidated.calls487[number]) {
         consolidated.calls487[number] = result.calls487[number];
@@ -298,30 +342,40 @@ if (isMainThread) {
   }
 
   async function saveToDB(data, responseCode) {
-    console.log('\nSalvando dados no banco de dados...\n');
+    if (Object.keys(data.calls200).length === 0 && 
+        Object.keys(data.calls404).length === 0 && 
+        Object.keys(data.calls487).length === 0) {
+      return;
+    }
+
+    console.log('Salvando dados no banco de dados...');
 
     const database = new db();
     await database.connect();
 
     switch(responseCode) {
       case 200:
-        console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
-        await database.insertCalls200(data.calls200);
+        if (Object.keys(data.calls200).length > 0) {
+          console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
+          await database.insertCalls200(data.calls200);
+        }
         break;
       case 404:
-        console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
-        await database.insertCalls404(data.calls404);
+        if (Object.keys(data.calls404).length > 0) {
+          console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
+          await database.insertCalls404(data.calls404);
+        }
         break;
       case 487:
-        console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
-        await database.insertCalls487(data.calls487);
+        if (Object.keys(data.calls487).length > 0) {
+          console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
+          await database.insertCalls487(data.calls487);
+        }
         break;
-      default:
-        console.log('Código de resposta não reconhecido:', responseCode);
     }
 
     await database.disconnect();
-    console.log('Dados salvos com sucesso!');
+    console.log('✅ Dados salvos com sucesso!');
   }
 
   // Executar
@@ -333,8 +387,6 @@ if (isMainThread) {
     console.log('Exemplo: node main.js 200.csv 200');
     console.log('Exemplo: node main.js 404.csv 404');
     console.log('Exemplo: node main.js 487.csv 487');
-    console.log('\nPara máxima performance, execute com:');
-    console.log('node --max-old-space-size=8192 --expose-gc main.js arquivo.csv 200');
     process.exit(1);
   }
 
@@ -343,7 +395,7 @@ if (isMainThread) {
     process.exit(1);
   }
 
-  processCSVStreaming(filePath, responseCode);
+  processFileInChunks(filePath, responseCode);
 
 } else {
   // Worker thread (otimizado)
@@ -362,19 +414,17 @@ if (isMainThread) {
       const line = lines[i];
       const data = line.split(';');
 
-      if (data.length < 3) continue; // Precisa de pelo menos 3 colunas
+      if (data.length < 3) continue;
 
-      const dateTime = data[0];  // data_hora
-      const number = data[2];    // número (coluna 2)
+      const dateTime = data[0];
+      const number = data[2];
       processed++;
 
-      // Converter data_hora para formato ISO
       const createdAt = convertToISO(dateTime);
       const updatedAt = new Date().toISOString();
 
       switch (responseCode) {
         case 200:
-          // Para código 200, data[1] é a duração
           const duration = parseInt(data[1]) || 0;
           if (!calls200[number] || duration > calls200[number].duration) {
             calls200[number] = {
