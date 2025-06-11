@@ -19,11 +19,13 @@ if (isMainThread) {
     console.log(`=========================================\n`);
 
     const startTime = Date.now();
-    const batchSize = 50000; // Aumentar batch size
+    const batchSize = 50000; // Linhas por batch
+    const saveInterval = 1000000; // Salvar a cada 1M linhas processadas
     const numCPUs = Math.min(os.cpus().length, 8);
 
     console.log(`Iniciando processamento com ${numCPUs} threads...`);
-    console.log(`Batch size: ${batchSize.toLocaleString()} linhas\n`);
+    console.log(`Batch size: ${batchSize.toLocaleString()} linhas`);
+    console.log(`Salvamento a cada: ${saveInterval.toLocaleString()} linhas\n`);
 
     // Configurar stream de leitura
     const fileStream = fs.createReadStream(filePath, {
@@ -37,6 +39,7 @@ if (isMainThread) {
     let lineCount = 0;
     let batch = [];
     let batchNumber = 0;
+    let lastSaveCount = 0;
     const consolidated = {
       calls200: {},
       calls404: {},
@@ -59,7 +62,7 @@ if (isMainThread) {
       return new Promise((resolve, reject) => {
         let availableWorker = null;
         let attempts = 0;
-
+        
         const findWorker = () => {
           availableWorker = workers.find(w => !w.busy);
           if (!availableWorker && attempts < 50) {
@@ -67,7 +70,7 @@ if (isMainThread) {
             setTimeout(findWorker, 100);
             return;
           }
-
+          
           if (!availableWorker) {
             reject(new Error(`Nenhum worker disponível após ${attempts * 100}ms`));
             return;
@@ -131,12 +134,12 @@ if (isMainThread) {
           while (activeBatches.length >= maxConcurrentBatches) {
             try {
               await Promise.race(activeBatches);
-
+              
               // Remover batches concluídos
               for (let i = activeBatches.length - 1; i >= 0; i--) {
                 try {
                   const result = await Promise.race([
-                    activeBatches[i],
+                    activeBatches[i], 
                     new Promise(resolve => setTimeout(() => resolve('pending'), 10))
                   ]);
                   if (result !== 'pending') {
@@ -159,14 +162,14 @@ if (isMainThread) {
             const elapsed = (Date.now() - startTime) / 1000;
             const linesPerSecond = lineCount / elapsed;
             const memUsage = process.memoryUsage();
-
+            
             console.log(`\n=== PROGRESSO ===`);
             console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
             console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
             console.log(`Memória: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
-
+            
             // Mostrar contadores baseado no código SIP
-            switch (sipCode) {
+            switch(sipCode) {
               case 200:
                 console.log(`Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
                 break;
@@ -182,6 +185,30 @@ if (isMainThread) {
             if (global.gc) {
               global.gc();
             }
+          }
+
+          // SALVAR PERIODICAMENTE NO BANCO PARA LIBERAR MEMÓRIA
+          if (lineCount - lastSaveCount >= saveInterval) {
+            console.log(`\n💾 Checkpoint: Salvando dados no banco (${lineCount.toLocaleString()} linhas processadas)...`);
+            
+            // Aguardar todos os batches pendentes antes de salvar
+            await Promise.allSettled(activeBatches);
+            
+            // Salvar dados atuais
+            await saveToDBPartial(consolidated, sipCode);
+            
+            // Limpar memória após salvar
+            consolidated.calls200 = {};
+            consolidated.calls404 = {};
+            consolidated.calls487 = {};
+            lastSaveCount = lineCount;
+            
+            // Forçar garbage collection
+            if (global.gc) {
+              global.gc();
+            }
+            
+            console.log(`✅ Checkpoint salvo! Memória liberada. Continuando processamento...\n`);
           }
         }
       }
@@ -203,31 +230,19 @@ if (isMainThread) {
       }
     });
 
-    // Salvar consolidado no banco
-    console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando no banco...`);
-    await saveToDB(consolidated, sipCode);
+    // Salvar dados finais
+    console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando dados finais...`);
+    await saveToDBPartial(consolidated, sipCode);
 
     const endTime = Date.now();
     const totalTime = (endTime - startTime) / 1000;
     const linesPerSecond = lineCount / totalTime;
-
+    
     console.log(`\n=== RESUMO FINAL ===`);
     console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
-    console.log(`Total processado: ${consolidated.total.toLocaleString()} registros`);
-
-    // Mostrar apenas a tabela relevante
-    switch (sipCode) {
-      case 200:
-        console.log(`Calls200 únicos: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
-        break;
-      case 404:
-        console.log(`Calls404 únicos: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
-        break;
-      case 487:
-        console.log(`Calls487 únicos: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
-        break;
-    }
+    console.log(`Total processado: ${lineCount.toLocaleString()} linhas`);
+    console.log(`Salvamentos realizados: ${Math.ceil(lineCount / saveInterval)} checkpoints`);
     console.log(`====================`);
   }
 
@@ -259,48 +274,51 @@ if (isMainThread) {
     consolidated.total += result.processed;
   }
 
-  async function saveToDB(data, sipCode) {
-    console.log('\nSalvando dados no banco de dados...\n');
-
-    const database = new db();
-    await database.connect();
-
-    // Salvar apenas na tabela correspondente ao código SIP
-    switch (sipCode) {
-      case 200:
-        if (Object.keys(data.calls200).length > 0) {
-          console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
-          await database.insertCalls200(data.calls200);
-        } else {
-          console.log('Nenhum registro calls200 para inserir.');
-        }
-        break;
-
-      case 404:
-        if (Object.keys(data.calls404).length > 0) {
-          console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
-          await database.insertCalls404(data.calls404);
-        } else {
-          console.log('Nenhum registro calls404 para inserir.');
-        }
-        break;
-
-      case 487:
-        if (Object.keys(data.calls487).length > 0) {
-          console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
-          await database.insertCalls487(data.calls487);
-        } else {
-          console.log('Nenhum registro calls487 para inserir.');
-        }
-        break;
-
-      default:
-        console.log(`Código SIP ${sipCode} não reconhecido. Dados não salvos.`);
-        break;
+  // Função para salvar parcialmente no banco (checkpoints)
+  async function saveToDBPartial(data, sipCode) {
+    if (Object.keys(data.calls200).length === 0 && 
+        Object.keys(data.calls404).length === 0 && 
+        Object.keys(data.calls487).length === 0) {
+      return; // Nada para salvar
     }
 
-    await database.disconnect();
-    console.log('✅ Dados salvos com sucesso!');
+    const database = new db();
+    
+    try {
+      await database.connect();
+
+      // Salvar apenas na tabela correspondente ao código SIP
+      switch(sipCode) {
+        case 200:
+          if (Object.keys(data.calls200).length > 0) {
+            console.log(`📥 Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
+            await database.insertCalls200(data.calls200);
+          }
+          break;
+          
+        case 404:
+          if (Object.keys(data.calls404).length > 0) {
+            console.log(`📥 Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
+            await database.insertCalls404(data.calls404);
+          }
+          break;
+          
+        case 487:
+          if (Object.keys(data.calls487).length > 0) {
+            console.log(`📥 Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
+            await database.insertCalls487(data.calls487);
+          }
+          break;
+      }
+
+      await database.disconnect();
+    } catch (error) {
+      console.error('❌ Erro ao salvar no banco:', error.message);
+      if (database) {
+        await database.disconnect();
+      }
+      throw error;
+    }
   }
 
   // Executar
@@ -340,16 +358,15 @@ if (isMainThread) {
     let processed = 0;
 
     lines.forEach(line => {
-      const data = line.split(',');
+      const data = line.split(','); // Usar ';' como separador
 
       if (data.length < 3) {
         return;
       }
 
       const dateTime = data[0];     // Data/hora
-      const number = data[1];       // Número
-
-      const durationOrType = data[2]; // Duração ou tipo
+      const durationOrType = data[1]; // Duração ou tipo
+      const number = data[2];       // Número
 
       processed++;
 
