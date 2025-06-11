@@ -296,14 +296,14 @@ if (isMainThread) {
     let processed = 0;
 
     lines.forEach(line => {
-      const data = line.split(',');
+      const data = line.split(';');
 
       if (data.length < 2) {
         return;
       }
 
       const dateTime = data[0]; // Primeira coluna é a data_hora
-      const number = data[1]; // Segunda coluna é o número
+      const number = data[2]; // Segunda coluna é o número
       processed++;
 
       // Converter data_hora para formato ISO
