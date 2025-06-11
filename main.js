@@ -7,17 +7,63 @@ const db = require('./db'); // Importar o módulo de banco de dados
 
 if (isMainThread) {
   // Thread principal
-  async function processCSVStreaming(filePath) {
+  async function getFileInfo(filePath) {
+    try {
+      const stats = fs.statSync(filePath);
+      const fileSizeInBytes = stats.size;
+      const fileSizeInMB = fileSizeInBytes / (1024 * 1024);
+      const fileSizeInGB = fileSizeInMB / 1024;
+
+      console.log('\n=== INFORMAÇÕES DO ARQUIVO ===');
+      console.log('Arquivo:', filePath);
+      console.log('Tamanho:', fileSizeInBytes.toLocaleString(), 'bytes');
+      console.log('Tamanho:', fileSizeInMB.toFixed(2), 'MB');
+      console.log('Tamanho:', fileSizeInGB.toFixed(2), 'GB');
+      console.log('===============================\n');
+
+      return stats;
+    } catch (error) {
+      console.error('Erro ao ler informações do arquivo:', error.message);
+      return null;
+    }
+  }
+
+  async function getCSVHeader(filePath) {
+    const fileStream = fs.createReadStream(filePath);
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
+
+    for await (const line of rl) {
+      if (line.trim()) {
+        const header = line.split(';');
+        rl.close();
+        fileStream.destroy();
+        console.log('Primeira linha (amostra):', header);
+        console.log('Formato: [data_hora, numero, duração/codigo]\n');
+        return header;
+      }
+    }
+    return null;
+  }
+
+  async function processCSVStreaming(filePath, responseCode) {
     if (!fs.existsSync(filePath)) {
       console.log('\nERRO: Arquivo não encontrado...\n');
       return;
     }
 
+    // Mostrar informações do arquivo
+    await getFileInfo(filePath);
+    await getCSVHeader(filePath);
+
     const startTime = Date.now();
     const batchSize = 10000; // Linhas por batch
     const numCPUs = os.cpus().length;
 
-    console.log(`\nIniciando processamento em streaming com ${numCPUs} threads...\n`);
+    console.log(`Processando arquivo como código ${responseCode}`);
+    console.log(`Iniciando processamento em streaming com ${numCPUs} threads...\n`);
 
     // Configurar stream de leitura
     const fileStream = fs.createReadStream(filePath);
@@ -95,7 +141,8 @@ if (isMainThread) {
         // Enviar dados para processamento
         availableWorker.worker.postMessage({
           lines: batchData,
-          batchNumber: batchNum
+          batchNumber: batchNum,
+          responseCode: responseCode
         });
       });
     };
@@ -130,7 +177,9 @@ if (isMainThread) {
             }
           }
 
-          console.log(`Linhas processadas: ${lineCount}`);
+          if (lineCount % 50000 === 0) {
+            console.log(`Linhas processadas: ${lineCount.toLocaleString()}`);
+          }
         }
       }
     }
@@ -152,8 +201,8 @@ if (isMainThread) {
     });
 
     // Salvar consolidado no banco
-    console.log(`\nProcessamento de ${lineCount} linhas concluído. Salvando no banco...`);
-    await saveToDB(consolidated);
+    console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando no banco...`);
+    await saveToDB(consolidated, responseCode);
 
     const endTime = Date.now();
     console.log(`\nProcessamento concluído em ${(endTime - startTime) / 1000}s`);
@@ -186,19 +235,28 @@ if (isMainThread) {
     consolidated.total += result.processed;
   }
 
-  async function saveToDB(data) {
+  async function saveToDB(data, responseCode) {
     console.log('\nSalvando dados no banco de dados...\n');
 
     const database = new db();
     await database.connect();
 
-    console.log(`Inserindo ${Object.keys(data.calls200).length} registros de calls200...`);
-    console.log(`Inserindo ${Object.keys(data.calls404).length} registros de calls404...`);
-    console.log(`Inserindo ${Object.keys(data.calls487).length} registros de calls487...`);
-
-    await database.insertCalls200(data.calls200);
-    await database.insertCalls404(data.calls404);
-    await database.insertCalls487(data.calls487);
+    switch(responseCode) {
+      case 200:
+        console.log(`Inserindo ${Object.keys(data.calls200).length} registros de calls200...`);
+        await database.insertCalls200(data.calls200);
+        break;
+      case 404:
+        console.log(`Inserindo ${Object.keys(data.calls404).length} registros de calls404...`);
+        await database.insertCalls404(data.calls404);
+        break;
+      case 487:
+        console.log(`Inserindo ${Object.keys(data.calls487).length} registros de calls487...`);
+        await database.insertCalls487(data.calls487);
+        break;
+      default:
+        console.log('Código de resposta não reconhecido:', responseCode);
+    }
 
     await database.disconnect();
 
@@ -207,21 +265,31 @@ if (isMainThread) {
 
   // Executar
   const filePath = process.argv[2];
-  if (!filePath) {
-    console.log('Uso: node main.js <caminho_do_arquivo.csv>');
+  const responseCode = parseInt(process.argv[3]);
+
+  if (!filePath || !responseCode) {
+    console.log('Uso: node main.js <caminho_do_arquivo.csv> <codigo_resposta>');
+    console.log('Exemplo: node main.js 200.csv 200');
+    console.log('Exemplo: node main.js 404.csv 404');
+    console.log('Exemplo: node main.js 487.csv 487');
     process.exit(1);
   }
 
-  processCSVStreaming(filePath);
+  if (![200, 404, 487].includes(responseCode)) {
+    console.log('Código de resposta deve ser: 200, 404 ou 487');
+    process.exit(1);
+  }
+
+  processCSVStreaming(filePath, responseCode);
 
 } else {
   // Worker thread
-  parentPort.on('message', ({ lines, batchNumber }) => {
-    const result = processLines(lines);
+  parentPort.on('message', ({ lines, batchNumber, responseCode }) => {
+    const result = processLines(lines, responseCode);
     parentPort.postMessage(result);
   });
 
-  function processLines(lines) {
+  function processLines(lines, responseCode) {
     const calls200 = {};
     const calls404 = {};
     const calls487 = {};
@@ -230,19 +298,18 @@ if (isMainThread) {
     lines.forEach(line => {
       const data = line.split(';');
 
-      if (data.length < 3) {
+      if (data.length < 2) {
         return;
       }
 
-      const number = data[0];
-      const responseCode = parseInt(data[2]);
-
+      const number = data[1]; // Segunda coluna é o número
       processed++;
 
       switch (responseCode) {
         case 200:
-          if (data.length >= 4) {
-            const duration = parseInt(data[3]) || 0;
+          // Para código 200, terceira coluna é a duração
+          if (data.length >= 3) {
+            const duration = parseInt(data[2]) || 0;
             if (!calls200[number] || duration > calls200[number].duration) {
               calls200[number] = {
                 created_at: new Date().toISOString(),
@@ -254,6 +321,7 @@ if (isMainThread) {
           break;
 
         case 404:
+          // Para código 404, apenas registrar o número
           if (!calls404[number]) {
             calls404[number] = {
               created_at: new Date().toISOString(),
@@ -263,6 +331,7 @@ if (isMainThread) {
           break;
 
         case 487:
+          // Para código 487, contar tentativas
           if (!calls487[number]) {
             calls487[number] = {
               created_at: new Date().toISOString(),
