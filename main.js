@@ -37,7 +37,7 @@ if (isMainThread) {
 
     for await (const line of rl) {
       if (line.trim()) {
-        const header = line.split(';');
+        const header = line.split(',');
         rl.close();
         fileStream.destroy();
         console.log('Primeira linha (amostra):', header);
