@@ -307,7 +307,7 @@ if (isMainThread) {
       processed++;
 
       // Converter data_hora para formato ISO
-      const createdAt = convertToISO(dateTime);
+      const createdAt = new Date().toISOString();
 
       switch (responseCode) {
         case 200:
