@@ -329,7 +329,7 @@ if (isMainThread) {
       if (data.length < 2) continue;
 
       const dateTime = data[0];
-      const number = data[1];
+      const number = data[2];
       processed++;
 
       // Converter data_hora para formato ISO
