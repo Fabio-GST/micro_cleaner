@@ -41,7 +41,7 @@ if (isMainThread) {
         rl.close();
         fileStream.destroy();
         console.log('Primeira linha (amostra):', header);
-        console.log('Formato: [data_hora, numero, duração/codigo]\n');
+        console.log('Formato: [data_hora, numero/duração, numero]\n');
         return header;
       }
     }
@@ -59,17 +59,20 @@ if (isMainThread) {
     await getCSVHeader(filePath);
 
     const startTime = Date.now();
-    const batchSize = 25000; // Aumentado para 50k linhas por batch
-    const numCPUs = Math.min(os.cpus().length, 8); // Limitar a 8 workers
-    const maxConcurrentBatches = 4; // Limitar batches simultâneos
-
+    
+    // Otimizações baseadas na máquina (16GB RAM, load baixo)
+    const batchSize = 100000; // Aumentar para 100k linhas por batch
+    const numCPUs = Math.min(os.cpus().length, 12); // Usar mais workers
+    const maxConcurrentBatches = 8; // Mais batches simultâneos
+    
+    console.log(`Sistema: ${os.cpus().length} CPUs, ${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB RAM`);
     console.log(`Processando arquivo como código ${responseCode}`);
     console.log(`Usando ${numCPUs} workers com batches de ${batchSize.toLocaleString()} linhas`);
     console.log(`Máximo ${maxConcurrentBatches} batches simultâneos\n`);
 
     // Configurar stream de leitura com buffer maior
     const fileStream = fs.createReadStream(filePath, {
-      highWaterMark: 1024 * 1024 // Buffer de 1MB
+      highWaterMark: 4 * 1024 * 1024 // Buffer de 4MB
     });
     const rl = readline.createInterface({
       input: fileStream,
@@ -102,31 +105,30 @@ if (isMainThread) {
     // Função otimizada para processar batch
     const processBatch = async (batchData, batchNum) => {
       return new Promise((resolve, reject) => {
-        // Encontrar worker disponível
         let availableWorker = null;
         let attempts = 0;
         
         const findWorker = () => {
           availableWorker = workers.find(w => !w.busy);
-          if (!availableWorker && attempts < 50) { // Máximo 5 segundos esperando
+          if (!availableWorker && attempts < 100) { // Aumentar timeout
             attempts++;
-            setTimeout(findWorker, 100);
+            setTimeout(findWorker, 50); // Reduzir intervalo
             return;
           }
           
           if (!availableWorker) {
-            reject(new Error(`Nenhum worker disponível após ${attempts * 100}ms`));
+            reject(new Error(`Nenhum worker disponível após ${attempts * 50}ms`));
             return;
           }
 
           availableWorker.busy = true;
 
-          // Configurar listeners únicos
           const messageHandler = (result) => {
             consolidateResults(result, consolidated);
             
-            if (batchNum % 10 === 0) { // Log a cada 10 batches
-              console.log(`Batch ${batchNum} processado: ${result.processed} linhas`);
+            if (batchNum % 50 === 0) { // Log a cada 50 batches
+              const memUsage = process.memoryUsage();
+              console.log(`Batch ${batchNum} processado: ${result.processed} linhas - Mem: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
             }
 
             availableWorker.busy = false;
@@ -146,7 +148,6 @@ if (isMainThread) {
           availableWorker.worker.once('message', messageHandler);
           availableWorker.worker.once('error', errorHandler);
 
-          // Enviar dados para processamento
           availableWorker.worker.postMessage({
             lines: batchData,
             batchNumber: batchNum,
@@ -164,42 +165,59 @@ if (isMainThread) {
         batch.push(line);
         lineCount++;
 
-        // Quando batch estiver cheio, processar
         if (batch.length === batchSize) {
           batchNumber++;
           const batchToProcess = [...batch];
           batch = [];
 
-          // Aguardar se há muitos batches em processamento
+          // Controle de concorrência otimizado
           while (activeBatches.length >= maxConcurrentBatches) {
-            await Promise.race(activeBatches);
-            // Remover batches concluídos
-            for (let i = activeBatches.length - 1; i >= 0; i--) {
-              try {
-                const result = await Promise.race([
-                  activeBatches[i], 
-                  new Promise(resolve => setTimeout(() => resolve('pending'), 10))
-                ]);
-                if (result !== 'pending') {
-                  activeBatches.splice(i, 1);
+            try {
+              await Promise.race(activeBatches);
+              
+              // Limpeza eficiente de batches concluídos
+              const stillPending = [];
+              for (const batchPromise of activeBatches) {
+                try {
+                  const result = await Promise.race([
+                    batchPromise,
+                    new Promise(resolve => setTimeout(() => resolve('timeout'), 10))
+                  ]);
+                  if (result === 'timeout') {
+                    stillPending.push(batchPromise);
+                  }
+                } catch (error) {
+                  // Batch com erro - não adicionar ao stillPending
                 }
-              } catch (error) {
-                activeBatches.splice(i, 1);
               }
+              activeBatches.splice(0, activeBatches.length, ...stillPending);
+              
+            } catch (error) {
+              console.warn('Erro no controle de batches:', error.message);
+              activeBatches.length = Math.max(0, activeBatches.length - 1);
             }
           }
 
-          // Processar batch assincronamente
           const batchPromise = processBatch(batchToProcess, batchNumber);
           activeBatches.push(batchPromise);
 
-          if (lineCount % 100000 === 0) {
+          // Log de progresso otimizado
+          if (lineCount % 500000 === 0) { // Log a cada 500k linhas
             const elapsed = (Date.now() - startTime) / 1000;
             const linesPerSecond = lineCount / elapsed;
-            console.log(`Progresso: ${lineCount.toLocaleString()} linhas em ${elapsed.toFixed(1)}s (${Math.round(linesPerSecond).toLocaleString()} linhas/s)`);
+            const memUsage = process.memoryUsage();
+            const estimatedTotal = lineCount / (elapsed / 60) * 60; // Estimativa por hora
             
-            // Força garbage collection se disponível
-            if (global.gc) {
+            console.log(`\n=== PROGRESSO ===`);
+            console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
+            console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
+            console.log(`Batches ativos: ${activeBatches.length}/${maxConcurrentBatches}`);
+            console.log(`Memória: Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB / RSS ${Math.round(memUsage.rss / 1024 / 1024)}MB`);
+            console.log(`Workers ocupados: ${workers.filter(w => w.busy).length}/${numCPUs}`);
+            console.log(`==================\n`);
+            
+            // Garbage collection otimizado
+            if (global.gc && lineCount % 1000000 === 0) {
               global.gc();
             }
           }
@@ -214,16 +232,25 @@ if (isMainThread) {
       activeBatches.push(batchPromise);
     }
 
-    // Aguardar todos os batches pendentes
     console.log('\nAguardando conclusão de todos os batches...');
-    await Promise.all(activeBatches);
+    
+    // Aguardar com timeout para evitar travamento
+    try {
+      await Promise.allSettled(activeBatches);
+    } catch (error) {
+      console.error('Erro ao aguardar batches:', error.message);
+    }
 
-    // Fechar workers
-    workers.forEach(w => {
-      w.worker.terminate();
+    // Fechar workers com cleanup
+    console.log('Fechando workers...');
+    workers.forEach((w, index) => {
+      try {
+        w.worker.terminate();
+      } catch (error) {
+        console.warn(`Erro ao fechar worker ${index}:`, error.message);
+      }
     });
 
-    // Salvar consolidado no banco
     console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando no banco...`);
     await saveToDB(consolidated, responseCode);
 
@@ -231,9 +258,15 @@ if (isMainThread) {
     const totalTime = (endTime - startTime) / 1000;
     const linesPerSecond = lineCount / totalTime;
     
-    console.log(`\nProcessamento concluído em ${totalTime.toFixed(1)}s`);
+    console.log(`\n=== RESUMO FINAL ===`);
+    console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
-    console.log(`Total processado: ${consolidated.total} registros`);
+    console.log(`Total processado: ${consolidated.total.toLocaleString()} registros`);
+    console.log(`Registros únicos por código:`);
+    console.log(`  - Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
+    console.log(`  - Calls404: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
+    console.log(`  - Calls487: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
+    console.log(`====================`);
   }
 
   function consolidateResults(result, consolidated) {
@@ -257,6 +290,7 @@ if (isMainThread) {
       } else {
         consolidated.calls487[number].attemps += result.calls487[number].attemps;
         consolidated.calls487[number].created_at = result.calls487[number].created_at;
+        consolidated.calls487[number].updated_at = result.calls487[number].updated_at;
       }
     }
 
@@ -271,15 +305,15 @@ if (isMainThread) {
 
     switch(responseCode) {
       case 200:
-        console.log(`Inserindo ${Object.keys(data.calls200).length} registros de calls200...`);
+        console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
         await database.insertCalls200(data.calls200);
         break;
       case 404:
-        console.log(`Inserindo ${Object.keys(data.calls404).length} registros de calls404...`);
+        console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
         await database.insertCalls404(data.calls404);
         break;
       case 487:
-        console.log(`Inserindo ${Object.keys(data.calls487).length} registros de calls487...`);
+        console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
         await database.insertCalls487(data.calls487);
         break;
       default:
@@ -299,6 +333,8 @@ if (isMainThread) {
     console.log('Exemplo: node main.js 200.csv 200');
     console.log('Exemplo: node main.js 404.csv 404');
     console.log('Exemplo: node main.js 487.csv 487');
+    console.log('\nPara máxima performance, execute com:');
+    console.log('node --max-old-space-size=8192 --expose-gc main.js arquivo.csv 200');
     process.exit(1);
   }
 
@@ -326,26 +362,27 @@ if (isMainThread) {
       const line = lines[i];
       const data = line.split(';');
 
-      if (data.length < 2) continue;
+      if (data.length < 3) continue; // Precisa de pelo menos 3 colunas
 
-      const dateTime = data[0];
-      const number = data[2];
+      const dateTime = data[0];  // data_hora
+      const number = data[2];    // número (coluna 2)
       processed++;
 
       // Converter data_hora para formato ISO
       const createdAt = convertToISO(dateTime);
+      const updatedAt = new Date().toISOString();
 
       switch (responseCode) {
         case 200:
-          if (data.length >= 3) {
-            const duration = parseInt(data[2]) || 0;
-            if (!calls200[number] || duration > calls200[number].duration) {
-              calls200[number] = {
-                created_at: createdAt,
-                number: number,
-                duration: duration
-              };
-            }
+          // Para código 200, data[1] é a duração
+          const duration = parseInt(data[1]) || 0;
+          if (!calls200[number] || duration > calls200[number].duration) {
+            calls200[number] = {
+              created_at: createdAt,
+              updated_at: updatedAt,
+              number: number,
+              duration: duration
+            };
           }
           break;
 
@@ -353,6 +390,7 @@ if (isMainThread) {
           if (!calls404[number]) {
             calls404[number] = {
               created_at: createdAt,
+              updated_at: updatedAt,
               number: number
             };
           }
@@ -362,12 +400,14 @@ if (isMainThread) {
           if (!calls487[number]) {
             calls487[number] = {
               created_at: createdAt,
+              updated_at: updatedAt,
               number: number,
               attemps: 1
             };
           } else {
             calls487[number].attemps++;
             calls487[number].created_at = createdAt;
+            calls487[number].updated_at = updatedAt;
           }
           break;
       }
