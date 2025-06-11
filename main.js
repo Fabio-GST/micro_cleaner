@@ -347,8 +347,8 @@ if (isMainThread) {
       }
 
       const dateTime = data[0];     // Data/hora
-      const durationOrType = data[1]; // Duração ou tipo
-      const number = data[2];       // Número
+      const durationOrType = data[2]; // Duração ou tipo
+      const number = data[1];       // Número
 
       processed++;
 
