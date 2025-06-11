@@ -358,7 +358,7 @@ if (isMainThread) {
     let processed = 0;
 
     lines.forEach(line => {
-      const data = line.split(','); // Usar ';' como separador
+      const data = line.split(';'); // Usar ';' como separador
 
       if (data.length < 3) {
         return;
