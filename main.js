@@ -302,8 +302,12 @@ if (isMainThread) {
         return;
       }
 
+      const dateTime = data[0]; // Primeira coluna é a data_hora
       const number = data[1]; // Segunda coluna é o número
       processed++;
+
+      // Converter data_hora para formato ISO
+      const createdAt = convertToISO(dateTime);
 
       switch (responseCode) {
         case 200:
@@ -312,7 +316,7 @@ if (isMainThread) {
             const duration = parseInt(data[2]) || 0;
             if (!calls200[number] || duration > calls200[number].duration) {
               calls200[number] = {
-                created_at: new Date().toISOString(),
+                created_at: createdAt,
                 number: number,
                 duration: duration
               };
@@ -324,7 +328,7 @@ if (isMainThread) {
           // Para código 404, apenas registrar o número
           if (!calls404[number]) {
             calls404[number] = {
-              created_at: new Date().toISOString(),
+              created_at: createdAt,
               number: number
             };
           }
@@ -334,17 +338,36 @@ if (isMainThread) {
           // Para código 487, contar tentativas
           if (!calls487[number]) {
             calls487[number] = {
-              created_at: new Date().toISOString(),
+              created_at: createdAt,
               number: number,
               attemps: 1
             };
           } else {
             calls487[number].attemps++;
+            // Atualizar created_at para a tentativa mais recente
+            calls487[number].created_at = createdAt;
           }
           break;
       }
     });
 
     return { calls200, calls404, calls487, processed };
+  }
+  function convertToISO(dateTimeString) {
+    try {
+      // Formato esperado: "2025-04-15 07:30:01"
+      const date = new Date(dateTimeString);
+      
+      // Verificar se a data é válida
+      if (isNaN(date.getTime())) {
+        console.warn(`Data inválida encontrada: ${dateTimeString}, usando data atual`);
+        return new Date().toISOString();
+      }
+      
+      return date.toISOString();
+    } catch (error) {
+      console.warn(`Erro ao converter data: ${dateTimeString}, usando data atual`);
+      return new Date().toISOString();
+    }
   }
 }

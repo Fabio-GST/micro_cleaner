@@ -43,6 +43,26 @@ async function getCSVHeader(filePath) {
   return null;
 }
 
+
+// Função para converter data_hora do formato "2025-04-15 07:30:01" para ISO
+function convertToISO(dateTimeString) {
+  try {
+    // Formato esperado: "2025-04-15 07:30:01"
+    const date = new Date(dateTimeString);
+    
+    // Verificar se a data é válida
+    if (isNaN(date.getTime())) {
+      console.warn(`Data inválida encontrada: ${dateTimeString}, usando data atual`);
+      return new Date().toISOString();
+    }
+    
+    return date.toISOString();
+  } catch (error) {
+    console.warn(`Erro ao converter data: ${dateTimeString}, usando data atual`);
+    return new Date().toISOString();
+  }
+}
+
 function processLines(lines, responseCode) {
   const calls200 = {};
   const calls404 = {};
@@ -56,10 +76,15 @@ function processLines(lines, responseCode) {
       return;
     }
 
+    const dateTime = data[0]; // Primeira coluna é a data_hora
     const number = data[1]; // Segunda coluna é o número
     processed++;
 
+    // Converter data_hora para formato ISO
+    const createdAt = convertToISO(dateTime);
+
     console.log(`Processando linha ${processed}: ${data.join(' | ')}`);
+    console.log(`  Data/Hora original: ${dateTime} → ISO: ${createdAt}`);
 
     switch (responseCode) {
       case 200:
@@ -68,11 +93,13 @@ function processLines(lines, responseCode) {
           const duration = parseInt(data[2]) || 0;
           if (!calls200[number] || duration > calls200[number].duration) {
             calls200[number] = {
-              created_at: new Date().toISOString(),
+              created_at: createdAt,
               number: number,
               duration: duration
             };
-            console.log(`  → Calls200: ${number} com duração ${duration}s`);
+            console.log(`  → Calls200: ${number} com duração ${duration}s (${dateTime})`);
+          } else {
+            console.log(`  → Calls200: ${number} duração ${duration}s ignorada (menor que ${calls200[number].duration}s)`);
           }
         }
         break;
@@ -81,10 +108,12 @@ function processLines(lines, responseCode) {
         // Para código 404, apenas registrar o número
         if (!calls404[number]) {
           calls404[number] = {
-            created_at: new Date().toISOString(),
+            created_at: createdAt,
             number: number
           };
-          console.log(`  → Calls404: ${number}`);
+          console.log(`  → Calls404: ${number} (${dateTime})`);
+        } else {
+          console.log(`  → Calls404: ${number} já existe, ignorando`);
         }
         break;
 
@@ -92,14 +121,15 @@ function processLines(lines, responseCode) {
         // Para código 487, contar tentativas
         if (!calls487[number]) {
           calls487[number] = {
-            created_at: new Date().toISOString(),
+            created_at: createdAt,
             number: number,
             attemps: 1
           };
-          console.log(`  → Calls487: ${number} - primeira tentativa`);
+          console.log(`  → Calls487: ${number} - primeira tentativa (${dateTime})`);
         } else {
           calls487[number].attemps++;
-          console.log(`  → Calls487: ${number} - tentativa ${calls487[number].attemps}`);
+          calls487[number].created_at = createdAt; // Atualizar para a tentativa mais recente
+          console.log(`  → Calls487: ${number} - tentativa ${calls487[number].attemps} (${dateTime})`);
         }
         break;
     }
