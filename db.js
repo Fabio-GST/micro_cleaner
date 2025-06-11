@@ -13,10 +13,8 @@ class DatabaseManager {
       user: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
-      // Configurações válidas para mysql2
-      connectTimeout: 60000,
-      acquireTimeout: 60000,
-      timeout: 60000
+      // Remover configurações inválidas que causam warnings
+      connectTimeout: 60000
     });
 
     // Otimizações para inserções em massa
@@ -30,10 +28,10 @@ class DatabaseManager {
     if (Object.keys(calls200Data).length === 0) return;
 
     const values = Object.values(calls200Data).map(call => [
-      call.created_at,
-      call.updated_at,
-      call.number,
-      call.duration
+      call.created_at || new Date().toISOString(),
+      call.updated_at || new Date().toISOString(),
+      call.number || '',
+      call.duration || 0
     ]);
 
     await this.insertInBatches('calls200s', ['created_at', 'updated_at', 'number', 'duration'], values, 5000);
@@ -43,9 +41,9 @@ class DatabaseManager {
     if (Object.keys(calls404Data).length === 0) return;
 
     const values = Object.values(calls404Data).map(call => [
-      call.created_at,
-      call.updated_at,
-      call.number
+      call.created_at || new Date().toISOString(),
+      call.updated_at || new Date().toISOString(),
+      call.number || ''
     ]);
 
     await this.insertInBatches('calls404s', ['created_at','updated_at', 'number'], values, 5000);
@@ -55,10 +53,10 @@ class DatabaseManager {
     if (Object.keys(calls487Data).length === 0) return;
 
     const values = Object.values(calls487Data).map(call => [
-      call.created_at,
-      call.updated_at,
-      call.number,
-      call.attemps
+      call.created_at || new Date().toISOString(),
+      call.updated_at || new Date().toISOString(),
+      call.number || '',
+      call.attemps || 1
     ]);
 
     await this.insertInBatches('calls487s', ['created_at','updated_at', 'number', 'attemps'], values, 5000);
@@ -69,12 +67,26 @@ class DatabaseManager {
 
     console.log(`Inserindo ${values.length} registros em ${totalBatches} lotes na tabela ${tableName}...`);
 
+    // Validar dados antes da inserção
+    const validValues = values.filter(row => {
+      return row.every(value => value !== undefined && value !== null);
+    });
+
+    if (validValues.length !== values.length) {
+      console.warn(`⚠️  ${values.length - validValues.length} registros removidos por conter valores inválidos`);
+    }
+
+    if (validValues.length === 0) {
+      console.log('⚠️  Nenhum registro válido para inserir');
+      return;
+    }
+
     // Iniciar transação
     await this.connection.beginTransaction();
 
     try {
-      for (let i = 0; i < values.length; i += batchSize) {
-        const batch = values.slice(i, i + batchSize);
+      for (let i = 0; i < validValues.length; i += batchSize) {
+        const batch = validValues.slice(i, i + batchSize);
         const placeholders = batch.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
         const flatValues = batch.flat();
 
