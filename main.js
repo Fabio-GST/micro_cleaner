@@ -7,65 +7,23 @@ const db = require('./db'); // Importar o módulo de banco de dados
 
 if (isMainThread) {
   // Thread principal
-  async function getFileInfo(filePath) {
-    try {
-      const stats = fs.statSync(filePath);
-      const fileSizeInBytes = stats.size;
-      const fileSizeInMB = fileSizeInBytes / (1024 * 1024);
-      const fileSizeInGB = fileSizeInMB / 1024;
-
-      console.log('\n=== INFORMAÇÕES DO ARQUIVO ===');
-      console.log('Arquivo:', filePath);
-      console.log('Tamanho:', fileSizeInBytes.toLocaleString(), 'bytes');
-      console.log('Tamanho:', fileSizeInMB.toFixed(2), 'MB');
-      console.log('Tamanho:', fileSizeInGB.toFixed(2), 'GB');
-      console.log('===============================\n');
-
-      return stats;
-    } catch (error) {
-      console.error('Erro ao ler informações do arquivo:', error.message);
-      return null;
-    }
-  }
-
-  async function getCSVHeader(filePath) {
-    const fileStream = fs.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
-
-    for await (const line of rl) {
-      if (line.trim()) {
-        const header = line.split(',');
-        rl.close();
-        fileStream.destroy();
-        console.log('Primeira linha (amostra):', header);
-        console.log('Formato detectado: [data_hora, tipo, numero, codigo/duração]\n');
-        return header;
-      }
-    }
-    return null;
-  }
-
-  async function processCSVStreaming(filePath) {
+  async function processCSVStreaming(filePath, sipCode) {
     if (!fs.existsSync(filePath)) {
       console.log('\nERRO: Arquivo não encontrado...\n');
       return;
     }
 
-    // Mostrar informações do arquivo
-    await getFileInfo(filePath);
-    await getCSVHeader(filePath);
+    console.log(`\n=== PROCESSAMENTO SIP CODE ${sipCode} ===`);
+    console.log(`Arquivo: ${filePath}`);
+    console.log(`Código SIP: ${sipCode}`);
+    console.log(`=========================================\n`);
 
     const startTime = Date.now();
     const batchSize = 50000; // Aumentar batch size
     const numCPUs = Math.min(os.cpus().length, 8);
-    const maxConcurrentBatches = 4;
 
-    console.log(`Iniciando processamento com ${numCPUs} threads`);
-    console.log(`Batch size: ${batchSize.toLocaleString()} linhas`);
-    console.log(`Máximo ${maxConcurrentBatches} batches simultâneos\n`);
+    console.log(`Iniciando processamento com ${numCPUs} threads...`);
+    console.log(`Batch size: ${batchSize.toLocaleString()} linhas\n`);
 
     // Configurar stream de leitura
     const fileStream = fs.createReadStream(filePath, {
@@ -120,7 +78,7 @@ if (isMainThread) {
           const messageHandler = (result) => {
             consolidateResults(result, consolidated);
 
-            if (batchNum % 20 === 0) {
+            if (batchNum % 50 === 0) {
               console.log(`Batch ${batchNum} processado: ${result.processed} linhas`);
             }
 
@@ -141,9 +99,11 @@ if (isMainThread) {
           availableWorker.worker.once('message', messageHandler);
           availableWorker.worker.once('error', errorHandler);
 
+          // Enviar dados com o código SIP
           availableWorker.worker.postMessage({
             lines: batchData,
-            batchNumber: batchNum
+            batchNumber: batchNum,
+            sipCode: sipCode
           });
         };
 
@@ -153,6 +113,7 @@ if (isMainThread) {
 
     // Array para controlar batches em processamento
     const activeBatches = [];
+    const maxConcurrentBatches = 4;
 
     // Processar arquivo linha por linha
     for await (const line of rl) {
@@ -203,9 +164,19 @@ if (isMainThread) {
             console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
             console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
             console.log(`Memória: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
-            console.log(`Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
-            console.log(`Calls404: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
-            console.log(`Calls487: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
+            
+            // Mostrar contadores baseado no código SIP
+            switch(sipCode) {
+              case 200:
+                console.log(`Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
+                break;
+              case 404:
+                console.log(`Calls404: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
+                break;
+              case 487:
+                console.log(`Calls487: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
+                break;
+            }
             console.log(`==================\n`);
 
             if (global.gc) {
@@ -234,7 +205,7 @@ if (isMainThread) {
 
     // Salvar consolidado no banco
     console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando no banco...`);
-    await saveToDB(consolidated);
+    await saveToDB(consolidated, sipCode);
 
     const endTime = Date.now();
     const totalTime = (endTime - startTime) / 1000;
@@ -244,10 +215,19 @@ if (isMainThread) {
     console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
     console.log(`Total processado: ${consolidated.total.toLocaleString()} registros`);
-    console.log(`Registros únicos:`);
-    console.log(`  - Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
-    console.log(`  - Calls404: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
-    console.log(`  - Calls487: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
+    
+    // Mostrar apenas a tabela relevante
+    switch(sipCode) {
+      case 200:
+        console.log(`Calls200 únicos: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
+        break;
+      case 404:
+        console.log(`Calls404 únicos: ${Object.keys(consolidated.calls404).length.toLocaleString()}`);
+        break;
+      case 487:
+        console.log(`Calls487 únicos: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
+        break;
+    }
     console.log(`====================`);
   }
 
@@ -279,26 +259,44 @@ if (isMainThread) {
     consolidated.total += result.processed;
   }
 
-  async function saveToDB(data) {
+  async function saveToDB(data, sipCode) {
     console.log('\nSalvando dados no banco de dados...\n');
 
     const database = new db();
     await database.connect();
 
-    // Salvar apenas tabelas que têm dados
-    if (Object.keys(data.calls200).length > 0) {
-      console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
-      await database.insertCalls200(data.calls200);
-    }
-
-    if (Object.keys(data.calls404).length > 0) {
-      console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
-      await database.insertCalls404(data.calls404);
-    }
-
-    if (Object.keys(data.calls487).length > 0) {
-      console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
-      await database.insertCalls487(data.calls487);
+    // Salvar apenas na tabela correspondente ao código SIP
+    switch(sipCode) {
+      case 200:
+        if (Object.keys(data.calls200).length > 0) {
+          console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
+          await database.insertCalls200(data.calls200);
+        } else {
+          console.log('Nenhum registro calls200 para inserir.');
+        }
+        break;
+        
+      case 404:
+        if (Object.keys(data.calls404).length > 0) {
+          console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
+          await database.insertCalls404(data.calls404);
+        } else {
+          console.log('Nenhum registro calls404 para inserir.');
+        }
+        break;
+        
+      case 487:
+        if (Object.keys(data.calls487).length > 0) {
+          console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
+          await database.insertCalls487(data.calls487);
+        } else {
+          console.log('Nenhum registro calls487 para inserir.');
+        }
+        break;
+        
+      default:
+        console.log(`Código SIP ${sipCode} não reconhecido. Dados não salvos.`);
+        break;
     }
 
     await database.disconnect();
@@ -307,37 +305,50 @@ if (isMainThread) {
 
   // Executar
   const filePath = process.argv[2];
-  if (!filePath) {
-    console.log('Uso: node main.js <caminho_do_arquivo.csv>');
-    console.log('Exemplo: node main.js ../487/487.csv');
+  const sipCode = parseInt(process.argv[3]);
+
+  if (!filePath || !sipCode) {
+    console.log('Uso: node main.js <caminho_do_arquivo.csv> <codigo_sip>');
+    console.log('');
+    console.log('Exemplos:');
+    console.log('  node main.js ../200/dados.csv 200     # Para códigos 200');
+    console.log('  node main.js ../404/dados.csv 404     # Para códigos 404');
+    console.log('  node main.js ../487/487.csv 487       # Para códigos 487');
+    console.log('');
+    console.log('Códigos SIP suportados: 200, 404, 487');
     process.exit(1);
   }
 
-  processCSVStreaming(filePath);
+  if (![200, 404, 487].includes(sipCode)) {
+    console.log('❌ Código SIP deve ser: 200, 404 ou 487');
+    process.exit(1);
+  }
+
+  processCSVStreaming(filePath, sipCode);
 
 } else {
-  // Worker thread - LÓGICA CORRIGIDA
-  parentPort.on('message', ({ lines, batchNumber }) => {
-    const result = processLines(lines);
+  // Worker thread - PROCESSAMENTO BASEADO NO CÓDIGO SIP
+  parentPort.on('message', ({ lines, batchNumber, sipCode }) => {
+    const result = processLines(lines, sipCode);
     parentPort.postMessage(result);
   });
 
-  function processLines(lines) {
+  function processLines(lines, sipCode) {
     const calls200 = {};
     const calls404 = {};
     const calls487 = {};
     let processed = 0;
 
     lines.forEach(line => {
-      const data = line.split(','); // Usando ';' como separador
+      const data = line.split(',');
 
-      if (data.length < 4) {
-        return; // Precisa de pelo menos 4 colunas
+      if (data.length < 3) {
+        return;
       }
 
-      const dateTime = data[0];     // 2025-05-25 00:52:17
-      const number = data[1];       // 554430458397
-      const codeOrDuration = data[3]; // 487 ou duração
+      const dateTime = data[0];     // Data/hora
+      const durationOrType = data[1]; // Duração ou tipo
+      const number = data[2];       // Número
 
       processed++;
 
@@ -345,13 +356,11 @@ if (isMainThread) {
       const createdAt = convertToISO(dateTime);
       const updatedAt = new Date().toISOString();
 
-      // Detectar o tipo baseado no conteúdo da linha
-      const responseCode = parseInt(codeOrDuration);
-
-      switch (responseCode) {
+      // Processar baseado no código SIP especificado
+      switch (sipCode) {
         case 200:
-          // Para código 200, codeOrDuration é a duração da chamada
-          const duration = parseInt(codeOrDuration) || 0;
+          // Para código 200, data[1] é a duração
+          const duration = parseInt(durationOrType) || 0;
           if (!calls200[number] || duration > calls200[number].duration) {
             calls200[number] = {
               created_at: createdAt,
@@ -388,11 +397,6 @@ if (isMainThread) {
             calls487[number].updated_at = updatedAt;
           }
           break;
-
-        default:
-          // Para outros códigos, você pode adicionar lógica aqui
-          // console.log(`Código não reconhecido: ${responseCode}`);
-          break;
       }
     });
 
@@ -401,7 +405,6 @@ if (isMainThread) {
 
   function convertToISO(dateTimeString) {
     try {
-      // Formato esperado: "2025-05-25 00:52:17"
       const date = new Date(dateTimeString);
       if (isNaN(date.getTime())) {
         return new Date().toISOString();
