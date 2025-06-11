@@ -7,63 +7,17 @@ const db = require('./db'); // Importar o módulo de banco de dados
 
 if (isMainThread) {
   // Thread principal
-  async function getFileInfo(filePath) {
-    try {
-      const stats = fs.statSync(filePath);
-      const fileSizeInBytes = stats.size;
-      const fileSizeInMB = fileSizeInBytes / (1024 * 1024);
-      const fileSizeInGB = fileSizeInMB / 1024;
-
-      console.log('\n=== INFORMAÇÕES DO ARQUIVO ===');
-      console.log('Arquivo:', filePath);
-      console.log('Tamanho:', fileSizeInBytes.toLocaleString(), 'bytes');
-      console.log('Tamanho:', fileSizeInMB.toFixed(2), 'MB');
-      console.log('Tamanho:', fileSizeInGB.toFixed(2), 'GB');
-      console.log('===============================\n');
-
-      return stats;
-    } catch (error) {
-      console.error('Erro ao ler informações do arquivo:', error.message);
-      return null;
-    }
-  }
-
-  async function getCSVHeader(filePath) {
-    const fileStream = fs.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
-
-    for await (const line of rl) {
-      if (line.trim()) {
-        const header = line.split(';');
-        rl.close();
-        fileStream.destroy();
-        console.log('Primeira linha (amostra):', header);
-        console.log('Formato: [data_hora, numero, duração/codigo]\n');
-        return header;
-      }
-    }
-    return null;
-  }
-
-  async function processCSVStreaming(filePath, responseCode) {
+  async function processCSVStreaming(filePath) {
     if (!fs.existsSync(filePath)) {
       console.log('\nERRO: Arquivo não encontrado...\n');
       return;
     }
 
-    // Mostrar informações do arquivo
-    await getFileInfo(filePath);
-    await getCSVHeader(filePath);
-
     const startTime = Date.now();
     const batchSize = 10000; // Linhas por batch
     const numCPUs = os.cpus().length;
 
-    console.log(`Processando arquivo como código ${responseCode}`);
-    console.log(`Iniciando processamento em streaming com ${numCPUs} threads...\n`);
+    console.log(`\nIniciando processamento em streaming com ${numCPUs} threads...\n`);
 
     // Configurar stream de leitura
     const fileStream = fs.createReadStream(filePath);
@@ -141,8 +95,7 @@ if (isMainThread) {
         // Enviar dados para processamento
         availableWorker.worker.postMessage({
           lines: batchData,
-          batchNumber: batchNum,
-          responseCode: responseCode
+          batchNumber: batchNum
         });
       });
     };
@@ -177,9 +130,7 @@ if (isMainThread) {
             }
           }
 
-          if (lineCount % 50000 === 0) {
-            console.log(`Linhas processadas: ${lineCount.toLocaleString()}`);
-          }
+          console.log(`Linhas processadas: ${lineCount}`);
         }
       }
     }
@@ -201,8 +152,8 @@ if (isMainThread) {
     });
 
     // Salvar consolidado no banco
-    console.log(`\nProcessamento de ${lineCount.toLocaleString()} linhas concluído. Salvando no banco...`);
-    await saveToDB(consolidated, responseCode);
+    console.log(`\nProcessamento de ${lineCount} linhas concluído. Salvando no banco...`);
+    await saveToDB(consolidated);
 
     const endTime = Date.now();
     console.log(`\nProcessamento concluído em ${(endTime - startTime) / 1000}s`);
@@ -235,28 +186,19 @@ if (isMainThread) {
     consolidated.total += result.processed;
   }
 
-  async function saveToDB(data, responseCode) {
+  async function saveToDB(data) {
     console.log('\nSalvando dados no banco de dados...\n');
 
     const database = new db();
     await database.connect();
 
-    switch (responseCode) {
-      case 200:
-        console.log(`Inserindo ${Object.keys(data.calls200).length} registros de calls200...`);
-        await database.insertCalls200(data.calls200);
-        break;
-      case 404:
-        console.log(`Inserindo ${Object.keys(data.calls404).length} registros de calls404...`);
-        await database.insertCalls404(data.calls404);
-        break;
-      case 487:
-        console.log(`Inserindo ${Object.keys(data.calls487).length} registros de calls487...`);
-        await database.insertCalls487(data.calls487);
-        break;
-      default:
-        console.log('Código de resposta não reconhecido:', responseCode);
-    }
+    console.log(`Inserindo ${Object.keys(data.calls200).length} registros de calls200...`);
+    console.log(`Inserindo ${Object.keys(data.calls404).length} registros de calls404...`);
+    console.log(`Inserindo ${Object.keys(data.calls487).length} registros de calls487...`);
+
+    await database.insertCalls200(data.calls200);
+    await database.insertCalls404(data.calls404);
+    await database.insertCalls487(data.calls487);
 
     await database.disconnect();
 
@@ -265,31 +207,21 @@ if (isMainThread) {
 
   // Executar
   const filePath = process.argv[2];
-  const responseCode = parseInt(process.argv[3]);
-
-  if (!filePath || !responseCode) {
-    console.log('Uso: node main.js <caminho_do_arquivo.csv> <codigo_resposta>');
-    console.log('Exemplo: node main.js 200.csv 200');
-    console.log('Exemplo: node main.js 404.csv 404');
-    console.log('Exemplo: node main.js 487.csv 487');
+  if (!filePath) {
+    console.log('Uso: node main.js <caminho_do_arquivo.csv>');
     process.exit(1);
   }
 
-  if (![200, 404, 487].includes(responseCode)) {
-    console.log('Código de resposta deve ser: 200, 404 ou 487');
-    process.exit(1);
-  }
-
-  processCSVStreaming(filePath, responseCode);
+  processCSVStreaming(filePath);
 
 } else {
   // Worker thread
-  parentPort.on('message', ({ lines, batchNumber, responseCode }) => {
-    const result = processLines(lines, responseCode);
+  parentPort.on('message', ({ lines, batchNumber }) => {
+    const result = processLines(lines);
     parentPort.postMessage(result);
   });
 
-  function processLines(lines, responseCode) {
+  function processLines(lines) {
     const calls200 = {};
     const calls404 = {};
     const calls487 = {};
@@ -298,26 +230,22 @@ if (isMainThread) {
     lines.forEach(line => {
       const data = line.split(',');
 
-      if (data.length < 2) {
+      if (data.length < 3) {
         return;
       }
 
-      const dateTime = data[0]; // Primeira coluna é a data_hora
-      const number = data[1]; // Segunda coluna é o número
-      processed++;
+      const number = data[0];
+      const responseCode = parseInt(data[2]);
 
-      // Converter data_hora para formato ISO
-      const createdAt = new Date().toISOString();
+      processed++;
 
       switch (responseCode) {
         case 200:
-          // Para código 200, terceira coluna é a duração
-          if (data.length >= 3) {
-            const duration = parseInt(data[2]) || 0;
+          if (data.length >= 4) {
+            const duration = parseInt(data[3]) || 0;
             if (!calls200[number] || duration > calls200[number].duration) {
               calls200[number] = {
-                created_at: createdAt,
-                updated_at: createdAt,
+                created_at: new Date().toISOString(),
                 number: number,
                 duration: duration
               };
@@ -326,29 +254,23 @@ if (isMainThread) {
           break;
 
         case 404:
-          // Para código 404, apenas registrar o número
           if (!calls404[number]) {
             calls404[number] = {
-              created_at: createdAt,
-              updated_at: createdAt,
+              created_at: new Date().toISOString(),
               number: number
             };
           }
           break;
 
         case 487:
-          // Para código 487, contar tentativas
           if (!calls487[number]) {
             calls487[number] = {
-              created_at: createdAt,
-              updated_at: createdAt,
+              created_at: new Date().toISOString(),
               number: number,
               attemps: 1
             };
           } else {
             calls487[number].attemps++;
-            // Atualizar created_at para a tentativa mais recente
-            calls487[number].created_at = createdAt;
           }
           break;
       }
@@ -356,5 +278,4 @@ if (isMainThread) {
 
     return { calls200, calls404, calls487, processed };
   }
-
 }
