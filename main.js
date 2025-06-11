@@ -59,7 +59,7 @@ if (isMainThread) {
       return new Promise((resolve, reject) => {
         let availableWorker = null;
         let attempts = 0;
-        
+
         const findWorker = () => {
           availableWorker = workers.find(w => !w.busy);
           if (!availableWorker && attempts < 50) {
@@ -67,7 +67,7 @@ if (isMainThread) {
             setTimeout(findWorker, 100);
             return;
           }
-          
+
           if (!availableWorker) {
             reject(new Error(`Nenhum worker disponível após ${attempts * 100}ms`));
             return;
@@ -131,12 +131,12 @@ if (isMainThread) {
           while (activeBatches.length >= maxConcurrentBatches) {
             try {
               await Promise.race(activeBatches);
-              
+
               // Remover batches concluídos
               for (let i = activeBatches.length - 1; i >= 0; i--) {
                 try {
                   const result = await Promise.race([
-                    activeBatches[i], 
+                    activeBatches[i],
                     new Promise(resolve => setTimeout(() => resolve('pending'), 10))
                   ]);
                   if (result !== 'pending') {
@@ -159,14 +159,14 @@ if (isMainThread) {
             const elapsed = (Date.now() - startTime) / 1000;
             const linesPerSecond = lineCount / elapsed;
             const memUsage = process.memoryUsage();
-            
+
             console.log(`\n=== PROGRESSO ===`);
             console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
             console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
             console.log(`Memória: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
-            
+
             // Mostrar contadores baseado no código SIP
-            switch(sipCode) {
+            switch (sipCode) {
               case 200:
                 console.log(`Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
                 break;
@@ -210,14 +210,14 @@ if (isMainThread) {
     const endTime = Date.now();
     const totalTime = (endTime - startTime) / 1000;
     const linesPerSecond = lineCount / totalTime;
-    
+
     console.log(`\n=== RESUMO FINAL ===`);
     console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
     console.log(`Total processado: ${consolidated.total.toLocaleString()} registros`);
-    
+
     // Mostrar apenas a tabela relevante
-    switch(sipCode) {
+    switch (sipCode) {
       case 200:
         console.log(`Calls200 únicos: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
         break;
@@ -266,7 +266,7 @@ if (isMainThread) {
     await database.connect();
 
     // Salvar apenas na tabela correspondente ao código SIP
-    switch(sipCode) {
+    switch (sipCode) {
       case 200:
         if (Object.keys(data.calls200).length > 0) {
           console.log(`Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
@@ -275,7 +275,7 @@ if (isMainThread) {
           console.log('Nenhum registro calls200 para inserir.');
         }
         break;
-        
+
       case 404:
         if (Object.keys(data.calls404).length > 0) {
           console.log(`Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
@@ -284,7 +284,7 @@ if (isMainThread) {
           console.log('Nenhum registro calls404 para inserir.');
         }
         break;
-        
+
       case 487:
         if (Object.keys(data.calls487).length > 0) {
           console.log(`Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
@@ -293,7 +293,7 @@ if (isMainThread) {
           console.log('Nenhum registro calls487 para inserir.');
         }
         break;
-        
+
       default:
         console.log(`Código SIP ${sipCode} não reconhecido. Dados não salvos.`);
         break;
@@ -340,15 +340,16 @@ if (isMainThread) {
     let processed = 0;
 
     lines.forEach(line => {
-      const data = line.split(',');
+      const data = line.split(';');
 
       if (data.length < 3) {
         return;
       }
 
       const dateTime = data[0];     // Data/hora
-      const durationOrType = data[2]; // Duração ou tipo
       const number = data[1];       // Número
+
+      const durationOrType = data[2]; // Duração ou tipo
 
       processed++;
 
