@@ -94,6 +94,7 @@ function processLines(lines, responseCode) {
           if (!calls200[number] || duration > calls200[number].duration) {
             calls200[number] = {
               created_at: createdAt,
+              updated_at: createdAt,
               number: number,
               duration: duration
             };
@@ -109,6 +110,8 @@ function processLines(lines, responseCode) {
         if (!calls404[number]) {
           calls404[number] = {
             created_at: createdAt,
+            updated_at: createdAt,
+
             number: number
           };
           console.log(`  → Calls404: ${number} (${dateTime})`);
@@ -122,6 +125,7 @@ function processLines(lines, responseCode) {
         if (!calls487[number]) {
           calls487[number] = {
             created_at: createdAt,
+            updated_at: createdAt,
             number: number,
             attemps: 1
           };

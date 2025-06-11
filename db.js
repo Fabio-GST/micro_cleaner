@@ -31,11 +31,12 @@ class DatabaseManager {
 
     const values = Object.values(calls200Data).map(call => [
       call.created_at,
+      call.updated_at,
       call.number,
       call.duration
     ]);
 
-    await this.insertInBatches('calls200s', ['created_at', 'number', 'duration'], values, 5000);
+    await this.insertInBatches('calls200s', ['created_at', 'updated_at', 'number', 'duration'], values, 5000);
   }
 
   async insertCalls404(calls404Data) {
@@ -43,10 +44,11 @@ class DatabaseManager {
 
     const values = Object.values(calls404Data).map(call => [
       call.created_at,
+      call.updated_at,
       call.number
     ]);
 
-    await this.insertInBatches('calls404s', ['created_at', 'number'], values, 5000);
+    await this.insertInBatches('calls404s', ['created_at','updated_at', 'number'], values, 5000);
   }
 
   async insertCalls487(calls487Data) {
@@ -54,11 +56,12 @@ class DatabaseManager {
 
     const values = Object.values(calls487Data).map(call => [
       call.created_at,
+      call.updated_at,
       call.number,
       call.attemps
     ]);
 
-    await this.insertInBatches('calls487s', ['created_at', 'number', 'attemps'], values, 5000);
+    await this.insertInBatches('calls487s', ['created_at','updated_at', 'number', 'attemps'], values, 5000);
   }
 
   async insertInBatches(tableName, columns, values, batchSize = 5000) {

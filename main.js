@@ -317,6 +317,7 @@ if (isMainThread) {
             if (!calls200[number] || duration > calls200[number].duration) {
               calls200[number] = {
                 created_at: createdAt,
+                updated_at: createdAt,
                 number: number,
                 duration: duration
               };
@@ -329,6 +330,7 @@ if (isMainThread) {
           if (!calls404[number]) {
             calls404[number] = {
               created_at: createdAt,
+              updated_at: createdAt,
               number: number
             };
           }
@@ -339,6 +341,7 @@ if (isMainThread) {
           if (!calls487[number]) {
             calls487[number] = {
               created_at: createdAt,
+              updated_at: createdAt,
               number: number,
               attemps: 1
             };
