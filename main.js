@@ -340,7 +340,7 @@ if (isMainThread) {
     let processed = 0;
 
     lines.forEach(line => {
-      const data = line.split(';');
+      const data = line.split(',');
 
       if (data.length < 3) {
         return;
