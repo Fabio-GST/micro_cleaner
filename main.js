@@ -356,30 +356,30 @@ if (isMainThread) {
     const calls404 = {};
     const calls487 = {};
     let processed = 0;
-
-    lines.forEach(line => {
-      const data = line.split(';'); // Usar ';' como separador
-
-      if (data.length < 3) {
-        return;
-      }
-
-      const dateTime = data[0];     // Data/hora
-      const number = data[1];  
-      const durationOrType = data[2]; // Duração ou tipo
-           // Número
-
+  
+    lines.forEach((line, idx) => {
+      // Ignorar cabeçalho
+      if (idx === 0 && line.startsWith('CDR_DATE')) return;
+  
+      const data = line.split(',');
+  
+      if (data.length < 4) return;
+  
+      const dateTime = data[0];           // Data/hora
+      const number = data[1];             // Número
+      const duration = parseInt(data[2]) || 0; // Duração
+      const sip = parseInt(data[3]);      // SIP CODE
+  
+      // Só processa se o SIP code da linha for igual ao informado
+      if (sip !== sipCode) return;
+  
       processed++;
-
-      // Converter data_hora para formato ISO
+  
       const createdAt = convertToISO(dateTime);
       const updatedAt = new Date().toISOString();
-
-      // Processar baseado no código SIP especificado
+  
       switch (sipCode) {
         case 200:
-          // Para código 200, data[1] é a duração
-          const duration = parseInt(durationOrType) || 0;
           if (!calls200[number] || duration > calls200[number].duration) {
             calls200[number] = {
               created_at: createdAt,
@@ -389,9 +389,8 @@ if (isMainThread) {
             };
           }
           break;
-
+  
         case 404:
-          // Para código 404, apenas registrar o número
           if (!calls404[number]) {
             calls404[number] = {
               created_at: createdAt,
@@ -400,9 +399,8 @@ if (isMainThread) {
             };
           }
           break;
-
+  
         case 487:
-          // Para código 487, contar tentativas
           if (!calls487[number]) {
             calls487[number] = {
               created_at: createdAt,
@@ -418,7 +416,7 @@ if (isMainThread) {
           break;
       }
     });
-
+  
     return { calls200, calls404, calls487, processed };
   }
 
