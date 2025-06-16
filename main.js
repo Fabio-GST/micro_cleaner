@@ -375,10 +375,9 @@ if (isMainThread) {
       const dateTime = data[0];
       const number = data[1];
       const sip = parseInt(data[2]);
-      const duration = data.length > 3 ? parseInt(data[3]) || 0 : ParseInt(data[2]) || 0;
+      const duration = parseInt(data[2]);
 
       // Só processa se o SIP code da linha for igual ao informado
-      if (sip !== sipCode) return;
 
       processed++;
 
