@@ -62,7 +62,7 @@ if (isMainThread) {
       return new Promise((resolve, reject) => {
         let availableWorker = null;
         let attempts = 0;
-        
+
         const findWorker = () => {
           availableWorker = workers.find(w => !w.busy);
           if (!availableWorker && attempts < 50) {
@@ -70,7 +70,7 @@ if (isMainThread) {
             setTimeout(findWorker, 100);
             return;
           }
-          
+
           if (!availableWorker) {
             reject(new Error(`Nenhum worker disponível após ${attempts * 100}ms`));
             return;
@@ -134,12 +134,12 @@ if (isMainThread) {
           while (activeBatches.length >= maxConcurrentBatches) {
             try {
               await Promise.race(activeBatches);
-              
+
               // Remover batches concluídos
               for (let i = activeBatches.length - 1; i >= 0; i--) {
                 try {
                   const result = await Promise.race([
-                    activeBatches[i], 
+                    activeBatches[i],
                     new Promise(resolve => setTimeout(() => resolve('pending'), 10))
                   ]);
                   if (result !== 'pending') {
@@ -162,14 +162,14 @@ if (isMainThread) {
             const elapsed = (Date.now() - startTime) / 1000;
             const linesPerSecond = lineCount / elapsed;
             const memUsage = process.memoryUsage();
-            
+
             console.log(`\n=== PROGRESSO ===`);
             console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
             console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
             console.log(`Memória: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
-            
+
             // Mostrar contadores baseado no código SIP
-            switch(sipCode) {
+            switch (sipCode) {
               case 200:
                 console.log(`Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
                 break;
@@ -190,24 +190,24 @@ if (isMainThread) {
           // SALVAR PERIODICAMENTE NO BANCO PARA LIBERAR MEMÓRIA
           if (lineCount - lastSaveCount >= saveInterval) {
             console.log(`\n💾 Checkpoint: Salvando dados no banco (${lineCount.toLocaleString()} linhas processadas)...`);
-            
+
             // Aguardar todos os batches pendentes antes de salvar
             await Promise.allSettled(activeBatches);
-            
+
             // Salvar dados atuais
             await saveToDBPartial(consolidated, sipCode);
-            
+
             // Limpar memória após salvar
             consolidated.calls200 = {};
             consolidated.calls404 = {};
             consolidated.calls487 = {};
             lastSaveCount = lineCount;
-            
+
             // Forçar garbage collection
             if (global.gc) {
               global.gc();
             }
-            
+
             console.log(`✅ Checkpoint salvo! Memória liberada. Continuando processamento...\n`);
           }
         }
@@ -237,7 +237,7 @@ if (isMainThread) {
     const endTime = Date.now();
     const totalTime = (endTime - startTime) / 1000;
     const linesPerSecond = lineCount / totalTime;
-    
+
     console.log(`\n=== RESUMO FINAL ===`);
     console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
@@ -276,33 +276,33 @@ if (isMainThread) {
 
   // Função para salvar parcialmente no banco (checkpoints)
   async function saveToDBPartial(data, sipCode) {
-    if (Object.keys(data.calls200).length === 0 && 
-        Object.keys(data.calls404).length === 0 && 
-        Object.keys(data.calls487).length === 0) {
+    if (Object.keys(data.calls200).length === 0 &&
+      Object.keys(data.calls404).length === 0 &&
+      Object.keys(data.calls487).length === 0) {
       return; // Nada para salvar
     }
 
     const database = new db();
-    
+
     try {
       await database.connect();
 
       // Salvar apenas na tabela correspondente ao código SIP
-      switch(sipCode) {
+      switch (sipCode) {
         case 200:
           if (Object.keys(data.calls200).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
             await database.insertCalls200(data.calls200);
           }
           break;
-          
+
         case 404:
           if (Object.keys(data.calls404).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
             await database.insertCalls404(data.calls404);
           }
           break;
-          
+
         case 487:
           if (Object.keys(data.calls487).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
@@ -356,28 +356,35 @@ if (isMainThread) {
     const calls404 = {};
     const calls487 = {};
     let processed = 0;
-  
+
     lines.forEach((line, idx) => {
       // Ignorar cabeçalho
-      if (idx === 0 && line.startsWith('CDR_DATE')) return;
-  
-      const data = line.split(',');
-  
-      if (data.length < 4) return;
-  
-      const dateTime = data[0];           // Data/hora
-      const number = data[1];             // Número
-      const duration = parseInt(data[2]) || 0; // Duração
-      const sip = parseInt(data[3]);      // SIP CODE
-  
+      if (idx === 0 && line.toUpperCase().includes('CDR_DATE')) return;
+
+      // Remove aspas e espaços extras
+      const cleanLine = line.replace(/"/g, '').trim();
+
+      // Divide por vírgula (CSV padrão)
+      const data = cleanLine.split(',');
+
+      // Ajuste para CSVs com ou sem coluna de duração
+      // ["2025-01-02","5511900899658","404"]
+      // ["2025-01-02","5511900899658","404","30"]
+      if (data.length < 3) return;
+
+      const dateTime = data[0];
+      const number = data[1];
+      const sip = parseInt(data[2]);
+      const duration = data.length > 3 ? parseInt(data[3]) || 0 : 0;
+
       // Só processa se o SIP code da linha for igual ao informado
       if (sip !== sipCode) return;
-  
+
       processed++;
-  
+
       const createdAt = convertToISO(dateTime);
       const updatedAt = new Date().toISOString();
-  
+
       switch (sipCode) {
         case 200:
           if (!calls200[number] || duration > calls200[number].duration) {
@@ -389,7 +396,7 @@ if (isMainThread) {
             };
           }
           break;
-  
+
         case 404:
           if (!calls404[number]) {
             calls404[number] = {
@@ -399,7 +406,7 @@ if (isMainThread) {
             };
           }
           break;
-  
+
         case 487:
           if (!calls487[number]) {
             calls487[number] = {
@@ -416,7 +423,7 @@ if (isMainThread) {
           break;
       }
     });
-  
+
     return { calls200, calls404, calls487, processed };
   }
 
