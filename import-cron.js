@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const pastaImport = path.resolve(__dirname, '../imports');
 const sipCodes = [200, 404, 487];
 
-cron.schedule('0 2 * * *', async () => {
+cron.schedule('0 23 * * *', async () => {
   console.log(`[${new Date().toISOString()}] Iniciando importação automática...`);
 
   const arquivos = fs.readdirSync(pastaImport).filter(f => f.endsWith('.csv'));
@@ -48,3 +48,4 @@ async function processarArquivo(filePath, sipCode) {
     });
   });
 }
+
