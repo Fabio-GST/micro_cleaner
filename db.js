@@ -46,7 +46,7 @@ class DatabaseManager {
       call.number || ''
     ]);
 
-    await this.insertInBatches('calls404s', ['created_at','updated_at', 'number'], values, 5000);
+    await this.insertInBatches('calls404s', ['created_at', 'updated_at', 'number'], values, 5000);
   }
 
   async insertCalls487(calls487Data) {
@@ -59,7 +59,20 @@ class DatabaseManager {
       call.attemps || 1
     ]);
 
-    await this.insertInBatches('calls487s', ['created_at','updated_at', 'number', 'attemps'], values, 5000);
+    await this.insertInBatches('calls487s', ['created_at', 'updated_at', 'number', 'attemps'], values, 5000);
+  }
+
+  async insertCalls48x(calls48xData) {
+    if (Object.keys(calls48xData).length === 0) return;
+
+    const values = Object.values(calls48xData).map(call => [
+      call.created_at || new Date().toISOString(),
+      call.updated_at || new Date().toISOString(),
+      call.number || '',
+      call.attemps || 1
+    ]);
+
+    await this.insertInBatches('calls48x', ['created_at', 'updated_at', 'number', 'attemps'], values, 5000);
   }
 
   async insertInBatches(tableName, columns, values, batchSize = 5000) {

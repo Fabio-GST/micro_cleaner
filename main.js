@@ -44,6 +44,7 @@ if (isMainThread) {
       calls200: {},
       calls404: {},
       calls487: {},
+      calls48x: {}, // Para códigos 480 e 486
       total: 0
     };
 
@@ -62,7 +63,7 @@ if (isMainThread) {
       return new Promise((resolve, reject) => {
         let availableWorker = null;
         let attempts = 0;
-        
+
         const findWorker = () => {
           availableWorker = workers.find(w => !w.busy);
           if (!availableWorker && attempts < 50) {
@@ -70,7 +71,7 @@ if (isMainThread) {
             setTimeout(findWorker, 100);
             return;
           }
-          
+
           if (!availableWorker) {
             reject(new Error(`Nenhum worker disponível após ${attempts * 100}ms`));
             return;
@@ -134,12 +135,12 @@ if (isMainThread) {
           while (activeBatches.length >= maxConcurrentBatches) {
             try {
               await Promise.race(activeBatches);
-              
+
               // Remover batches concluídos
               for (let i = activeBatches.length - 1; i >= 0; i--) {
                 try {
                   const result = await Promise.race([
-                    activeBatches[i], 
+                    activeBatches[i],
                     new Promise(resolve => setTimeout(() => resolve('pending'), 10))
                   ]);
                   if (result !== 'pending') {
@@ -162,14 +163,14 @@ if (isMainThread) {
             const elapsed = (Date.now() - startTime) / 1000;
             const linesPerSecond = lineCount / elapsed;
             const memUsage = process.memoryUsage();
-            
+
             console.log(`\n=== PROGRESSO ===`);
             console.log(`Linhas: ${lineCount.toLocaleString()} em ${elapsed.toFixed(1)}s`);
             console.log(`Velocidade: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
             console.log(`Memória: ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`);
-            
+
             // Mostrar contadores baseado no código SIP
-            switch(sipCode) {
+            switch (sipCode) {
               case 200:
                 console.log(`Calls200: ${Object.keys(consolidated.calls200).length.toLocaleString()}`);
                 break;
@@ -179,6 +180,12 @@ if (isMainThread) {
               case 487:
                 console.log(`Calls487: ${Object.keys(consolidated.calls487).length.toLocaleString()}`);
                 break;
+              case 480:
+              case 486:
+                console.log(`Calls48x: ${Object.keys(consolidated.calls48x).length.toLocaleString()}`);
+                break;
+
+
             }
             console.log(`==================\n`);
 
@@ -190,24 +197,25 @@ if (isMainThread) {
           // SALVAR PERIODICAMENTE NO BANCO PARA LIBERAR MEMÓRIA
           if (lineCount - lastSaveCount >= saveInterval) {
             console.log(`\n💾 Checkpoint: Salvando dados no banco (${lineCount.toLocaleString()} linhas processadas)...`);
-            
+
             // Aguardar todos os batches pendentes antes de salvar
             await Promise.allSettled(activeBatches);
-            
+
             // Salvar dados atuais
             await saveToDBPartial(consolidated, sipCode);
-            
+
             // Limpar memória após salvar
             consolidated.calls200 = {};
             consolidated.calls404 = {};
             consolidated.calls487 = {};
+            consolidated.calls48x = {};
             lastSaveCount = lineCount;
-            
+
             // Forçar garbage collection
             if (global.gc) {
               global.gc();
             }
-            
+
             console.log(`✅ Checkpoint salvo! Memória liberada. Continuando processamento...\n`);
           }
         }
@@ -237,7 +245,7 @@ if (isMainThread) {
     const endTime = Date.now();
     const totalTime = (endTime - startTime) / 1000;
     const linesPerSecond = lineCount / totalTime;
-    
+
     console.log(`\n=== RESUMO FINAL ===`);
     console.log(`Tempo total: ${totalTime.toFixed(1)}s (${(totalTime / 60).toFixed(1)} min)`);
     console.log(`Velocidade média: ${Math.round(linesPerSecond).toLocaleString()} linhas/s`);
@@ -259,6 +267,12 @@ if (isMainThread) {
     for (const number in result.calls404) {
       consolidated.calls404[number] = result.calls404[number];
     }
+    // Consolidar calls48x (480 e 486)
+    for (const number in result.calls48x) {
+      if (!consolidated.calls48x[number]) {
+        consolidated.calls48x[number] = result.calls48x[number];
+      }
+    }
 
     // Consolidar calls487
     for (const number in result.calls487) {
@@ -276,37 +290,46 @@ if (isMainThread) {
 
   // Função para salvar parcialmente no banco (checkpoints)
   async function saveToDBPartial(data, sipCode) {
-    if (Object.keys(data.calls200).length === 0 && 
-        Object.keys(data.calls404).length === 0 && 
-        Object.keys(data.calls487).length === 0) {
+    if (Object.keys(data.calls200).length === 0 &&
+      Object.keys(data.calls404).length === 0 &&
+      Object.keys(data.calls487).length === 0 &&
+      Object.keys(data.calls48x).length === 0) {
       return; // Nada para salvar
     }
 
     const database = new db();
-    
+
     try {
       await database.connect();
 
       // Salvar apenas na tabela correspondente ao código SIP
-      switch(sipCode) {
+      switch (sipCode) {
         case 200:
           if (Object.keys(data.calls200).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls200).length.toLocaleString()} registros de calls200...`);
             await database.insertCalls200(data.calls200);
           }
           break;
-          
+
         case 404:
           if (Object.keys(data.calls404).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls404).length.toLocaleString()} registros de calls404...`);
             await database.insertCalls404(data.calls404);
           }
           break;
-          
+
         case 487:
           if (Object.keys(data.calls487).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls487).length.toLocaleString()} registros de calls487...`);
             await database.insertCalls487(data.calls487);
+          }
+          break;
+
+        case 480:
+        case 486:
+          if (Object.keys(data.calls48x).length > 0) {
+            console.log(`📥 Inserindo ${Object.keys(data.calls48x).length.toLocaleString()} registros de calls48x...`);
+            await database.insertCalls48x(data.calls48x);
           }
           break;
       }
@@ -355,6 +378,8 @@ if (isMainThread) {
     const calls200 = {};
     const calls404 = {};
     const calls487 = {};
+    const calls48x = {}; // Para códigos 480 e 486
+
     let processed = 0;
 
     lines.forEach(line => {
@@ -365,9 +390,9 @@ if (isMainThread) {
       }
 
       const dateTime = data[0];     // Data/hora
-      const number = data[1];  
+      const number = data[1];
       const durationOrType = data[2]; // Duração ou tipo
-           // Número
+      // Número
 
       processed++;
 
@@ -416,10 +441,33 @@ if (isMainThread) {
             calls487[number].updated_at = updatedAt;
           }
           break;
+
+
+        case 480:
+          // Para código 480, registrar tentativas
+          if (!calls48x[number]) {
+            calls48x[number] = {
+              created_at: createdAt,
+              updated_at: updatedAt,
+              number: number,
+            };
+          }
+          break;
+
+        case 486:
+          // Para código 486, registrar tentativas
+          if (!calls48x[number]) {
+            calls48x[number] = {
+              created_at: createdAt,
+              updated_at: updatedAt,
+              number: number,
+            };
+          }
+          break;
       }
     });
 
-    return { calls200, calls404, calls487, processed };
+    return { calls200, calls404, calls487, calls48x, processed };
   }
 
   function convertToISO(dateTimeString) {
