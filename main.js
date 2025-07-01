@@ -64,6 +64,7 @@ if (isMainThread) {
         let availableWorker = null;
         let attempts = 0;
 
+
         const findWorker = () => {
           availableWorker = workers.find(w => !w.busy);
           if (!availableWorker && attempts < 50) {
@@ -382,12 +383,20 @@ if (isMainThread) {
 
     let processed = 0;
 
-    lines.forEach(line => {
-      const data = line.split(';'); // Usar ';' como separador
+    lines.forEach((line, idx) => {
+      // Ignorar cabeçalho
+      if (idx === 0 && line.toUpperCase().includes('CDR_DATE')) return;
 
-      if (data.length < 3) {
-        return;
-      }
+      // Remove aspas e espaços extras
+      const cleanLine = line.replace(/"/g, '').trim();
+
+      // Divide por vírgula (CSV padrão)
+      const data = cleanLine.split(',');
+
+      // Ajuste para CSVs com ou sem coluna de duração
+      // ["2025-01-02","5511900899658","404"]
+      // ["2025-01-02","5511900899658","404","30"]
+      if (data.length < 3) return;
 
       const dateTime = data[0];     // Data/hora
       const number = data[1];
@@ -396,15 +405,11 @@ if (isMainThread) {
 
       processed++;
 
-      // Converter data_hora para formato ISO
       const createdAt = convertToISO(dateTime);
       const updatedAt = new Date().toISOString();
 
-      // Processar baseado no código SIP especificado
       switch (sipCode) {
         case 200:
-          // Para código 200, data[1] é a duração
-          const duration = parseInt(durationOrType) || 0;
           if (!calls200[number] || duration > calls200[number].duration) {
             calls200[number] = {
               created_at: createdAt,
@@ -416,7 +421,6 @@ if (isMainThread) {
           break;
 
         case 404:
-          // Para código 404, apenas registrar o número
           if (!calls404[number]) {
             calls404[number] = {
               created_at: createdAt,
@@ -427,7 +431,6 @@ if (isMainThread) {
           break;
 
         case 487:
-          // Para código 487, contar tentativas
           if (!calls487[number]) {
             calls487[number] = {
               created_at: createdAt,
