@@ -5,7 +5,7 @@ const { spawn } = require('child_process');
 
 // Configurações
 const pastaImport = path.resolve(__dirname, '../imports');
-const sipCodes = [200, 404, 487];
+const sipCodes = [200, 404, 487, 480, 486];
 
 // Função para processar arquivos da pasta de importação
 async function processarArquivosDaPasta() {
