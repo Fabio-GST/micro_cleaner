@@ -70,7 +70,7 @@ class DatabaseManager {
       call.number || '',
     ]);
 
-    await this.insertInBatches('calls48X', ['created_at', 'updated_at', 'number', 'attemps'], values, 5000);
+    await this.insertInBatches('calls48X', ['created_at', 'updated_at', 'number', ], values, 5000);
   }
 
   async insertInBatches(tableName, columns, values, batchSize = 5000) {
