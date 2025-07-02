@@ -326,8 +326,8 @@ if (isMainThread) {
           }
           break;
 
-        case 480:
         case 486:
+        case 480:
           if (Object.keys(data.calls48x).length > 0) {
             console.log(`📥 Inserindo ${Object.keys(data.calls48x).length.toLocaleString()} registros de calls48x...`);
             await database.insertCalls48x(data.calls48x);
@@ -447,6 +447,7 @@ if (isMainThread) {
 
 
         case 480:
+        case 486:
           // Para código 480, registrar tentativas
           if (!calls48x[number]) {
             calls48x[number] = {
@@ -457,16 +458,8 @@ if (isMainThread) {
           }
           break;
 
-        case 486:
-          // Para código 486, registrar tentativas
-          if (!calls48x[number]) {
-            calls48x[number] = {
-              created_at: createdAt,
-              updated_at: updatedAt,
-              number: number,
-            };
-          }
-          break;
+
+
       }
     });
 
