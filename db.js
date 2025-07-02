@@ -68,7 +68,6 @@ class DatabaseManager {
       call.created_at || new Date().toISOString(),
       call.updated_at || new Date().toISOString(),
       call.number || '',
-      call.attemps || 1
     ]);
 
     await this.insertInBatches('calls48X', ['created_at', 'updated_at', 'number', 'attemps'], values, 5000);
