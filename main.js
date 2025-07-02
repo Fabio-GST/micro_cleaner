@@ -361,8 +361,8 @@ if (isMainThread) {
     process.exit(1);
   }
 
-  if (![200, 404, 487].includes(sipCode)) {
-    console.log('❌ Código SIP deve ser: 200, 404 ou 487');
+  if (![200, 404, 487, 480, 486].includes(sipCode)) {
+    console.log('❌ Código SIP deve ser: 200, 404, 487, 486  ou 480');
     process.exit(1);
   }
 

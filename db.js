@@ -64,7 +64,6 @@ class DatabaseManager {
 
   async insertCalls48x(calls48xData) {
     if (Object.keys(calls48xData).length === 0) return;
-
     const values = Object.values(calls48xData).map(call => [
       call.created_at || new Date().toISOString(),
       call.updated_at || new Date().toISOString(),
