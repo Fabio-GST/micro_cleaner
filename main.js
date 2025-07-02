@@ -391,7 +391,7 @@ if (isMainThread) {
       const cleanLine = line.replace(/"/g, '').trim();
 
       // Divide por vírgula (CSV padrão)
-      const data = cleanLine.split(',');
+      const data = cleanLine.split(';');
 
       // Ajuste para CSVs com ou sem coluna de duração
       // ["2025-01-02","5511900899658","404"]
