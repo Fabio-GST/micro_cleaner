@@ -410,12 +410,12 @@ if (isMainThread) {
 
       switch (sipCode) {
         case 200:
-          if (!calls200[number] || duration > calls200[number].duration) {
+          if (!calls200[number] || durationOrType > calls200[number].duration) {
             calls200[number] = {
               created_at: createdAt,
               updated_at: updatedAt,
               number: number,
-              duration: duration
+              duration: durationOrType ? parseInt(durationOrType) : 0
             };
           }
           break;
